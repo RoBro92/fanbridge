@@ -28,5 +28,5 @@ jobs:
           context: ./container
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/fanbridge:latest
-            ghcr.io/${{ github.repository_owner }}/fanbridge:${{ github.sha }}
+            ghcr.io/robro92/fanbridge:latest
+            ghcr.io/robro92/fanbridge:${{ github.sha }}
