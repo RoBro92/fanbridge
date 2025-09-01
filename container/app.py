@@ -1,5 +1,5 @@
 from flask import Flask, jsonify
-import os, time, yaml, subprocess, glob, shlex, shutil
+import os, time, yaml, subprocess, glob, shlex, shutil, json
 
 app = Flask(__name__)
 STARTED = time.time()
@@ -93,63 +93,87 @@ def _is_hdd(dev_name: str) -> bool:
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-def _smart_temp_from_attrs(text: str) -> int | None:
-    # Try common patterns without spinning up (we already use -n standby where applicable)
-    for line in text.splitlines():
-        # smartctl -A for ATA/SATA (ID 194 or 190)
-        if line.startswith("194 ") or line.startswith("190 "):
-            parts = line.split()
-            if len(parts) >= 10:
-                try:
-                    return int(parts[9])
-                except Exception:
-                    pass
-        # smartctl for NVMe sometimes prints "Temperature: 41 C" or "Current Drive Temperature: 41 C"
-        if "Current Drive Temperature:" in line:
-            parts = line.split(":")
-            if len(parts) >= 2:
-                try:
-                    return int(parts[1].strip().split()[0])
-                except Exception:
-                    pass
-        if line.strip().startswith("Temperature:"):
-            try:
-                return int(line.strip().split()[1])
-            except Exception:
-                pass
-    return None
-
+# --- SMART helpers (JSON-based, robust) --------------------------------------
 def _enumerate_block_devices() -> list[tuple[str, str]]:
-    """
-    Return list of (device_path, dev_name) for /dev/sd? and /dev/nvme?n1 that exist.
-    """
+    """Return (device_path, dev_name) for sdX/sdXX/sdXXX and nvme?n1."""
     devs = []
-    for path in sorted(glob.glob("/dev/sd?")):
-        devs.append((path, os.path.basename(path)))
+    for pattern in ("/dev/sd?", "/dev/sd??", "/dev/sd???"):
+        for path in sorted(glob.glob(pattern)):
+            devs.append((path, os.path.basename(path)))
     for path in sorted(glob.glob("/dev/nvme?n1")):
         devs.append((path, os.path.basename(path)))
     return devs
 
-def _smart_read_drive(path: str, name: str) -> dict:
-    # Choose command flags
+def _smart_json(path: str, name: str) -> tuple[int, dict]:
+    """
+    Run smartctl in JSON. For SATA use -n standby (no wake); for NVMe regular -A.
+    Returns (returncode, parsed_json_or_empty_dict).
+    """
     if name.startswith("nvme"):
-        cmd = ["smartctl", "-A", path]
-        dtype = "SSD"
+        cmd = ["smartctl", "-j", "-A", path]
     else:
-        cmd = ["smartctl", "-n", "standby", "-A", path]  # won't spin up
-        dtype = "HDD" if _is_hdd(name) else "SSD"
-
+        cmd = ["smartctl", "-j", "-n", "standby", "-A", path]
     cp = _run(cmd)
-    if cp.returncode == 2:
-        # 2 means device is in low-power mode; treat as spun down
-        return {"dev": name, "type": dtype, "temp": None, "state": "spun down"}
-    if cp.returncode != 0 or not cp.stdout:
-        return {"dev": name, "type": dtype, "temp": None, "state": "N/A"}
+    try:
+        data = json.loads(cp.stdout) if cp.stdout else {}
+    except Exception:
+        data = {}
+    return cp.returncode, data
 
-    temp = _smart_temp_from_attrs(cp.stdout)
-    if temp is None:
-        return {"dev": name, "type": dtype, "temp": None, "state": "N/A"}
-    return {"dev": name, "type": dtype, "temp": temp, "state": "on"}
+def _smart_state_and_temp(rc: int, data: dict, name: str) -> tuple[str, int | None]:
+    """
+    Decide (state, tempC) from smartctl JSON + return code.
+    rc == 2 → in standby (not spun up); rc == 0 → OK/active; others → N/A.
+    """
+    # Determine standby/low-power from JSON if available
+    in_standby = False
+    pm = data.get("power_mode") or {}
+    if isinstance(pm, dict):
+        in_standby = bool(pm.get("is_in_standby") or pm.get("is_in_low_power_mode"))
+    if rc == 2 or in_standby:
+        return ("spun down", None)
+    if rc != 0:
+        return ("N/A", None)
+
+    # ATA: temperature via attribute 194 or 190, or via temperature.current
+    ata = data.get("ata_smart_attributes") or {}
+    table = ata.get("table") or []
+    for row in table:
+        try:
+            attr_id = int(row.get("id", -1))
+        except Exception:
+            continue
+        if attr_id in (194, 190):
+            raw = row.get("raw", {})
+            if isinstance(raw, dict) and isinstance(raw.get("value"), int):
+                return ("on", int(raw["value"]))
+            # fallback: try to parse digits from a stringified raw
+            try:
+                txt = str(row.get("raw", ""))
+                digits = "".join(ch for ch in txt if ch.isdigit())
+                if digits:
+                    return ("on", int(digits[:2]))
+            except Exception:
+                pass
+    temp_block = data.get("temperature") or {}
+    if isinstance(temp_block, dict) and isinstance(temp_block.get("current"), int):
+        return ("on", int(temp_block["current"]))
+
+    # NVMe: temperature in temperature.current or nvme_smart_health_information_log.temperature
+    nvme_log = data.get("nvme_smart_health_information_log") or {}
+    if isinstance(nvme_log, dict) and isinstance(nvme_log.get("temperature"), int):
+        return ("on", int(nvme_log["temperature"]))
+
+    return ("on", None)
+
+def _smart_read_drive(path: str, name: str) -> dict:
+    dtype = "SSD" if name.startswith("nvme") or not _is_hdd(name) else "HDD"
+    rc, data = _smart_json(path, name)
+    state, temp = _smart_state_and_temp(rc, data, name)
+    if state == "N/A" and not data and rc != 0:
+        print(f"[fanbridge] smartctl failed for {name} rc={rc}")
+    return {"dev": name, "type": dtype, "temp": temp, "state": state}
+# ---------------------------------------------------------------------------
 
 def map_temp_to_pwm(temp: int, thresholds: list[int], pwms: list[int]) -> int:
     step = 0
