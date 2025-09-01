@@ -5,18 +5,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
+# Install deps first for better caching
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Provide a default config inside the image
-RUN mkdir -p /config
-COPY config.example.yml /config/config.yml
-
+# Copy app (includes config.example.yml which lives at /app/config.example.yml)
 COPY . /app/
 
 ENV PYTHONUNBUFFERED=1
 ENV FANBRIDGE_VERSION=0.0.1
-# Optional: allow overriding config path later
+# App reads /config/config.yml, but will fall back to /app/config.example.yml if missing
 ENV FANBRIDGE_CONFIG=/config/config.yml
 
 EXPOSE 8080
