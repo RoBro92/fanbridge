@@ -7,13 +7,31 @@ STARTED = time.time()
 CONFIG_PATH = os.environ.get("FANBRIDGE_CONFIG", "/config/config.yml")
 
 def load_config():
+    # Primary: user-mounted config path (e.g., /config/config.yml)
     try:
         with open(CONFIG_PATH, "r") as f:
             return yaml.safe_load(f) or {}
     except FileNotFoundError:
-        # fallback to example config shipped in image
-        with open("/config/config.yml", "r") as f:
+        pass
+    # Fallback: example config shipped inside the image
+    try:
+        with open("/app/config.example.yml", "r") as f:
             return yaml.safe_load(f) or {}
+    except Exception:
+        # Last resort: minimal defaults so the app still starts
+        return {
+            "mode": "sim",
+            "sim": {"drives": []},
+            "hdd_thresholds": [20,25,28,30,32,34,36,38,40,42],
+            "hdd_pwm":        [10,15,20,30,40,50,60,70,85,100],
+            "ssd_thresholds": [25,30,35,38,40,42,45,48,50,55],
+            "ssd_pwm":        [10,10,15,25,35,45,55,65,80,95],
+            "single_override_hdd_c": 45,
+            "single_override_ssd_c": 60,
+            "override_pwm": 100,
+            "fallback_pwm": 10,
+            "pwm_hysteresis": 3
+        }
 
 cfg = load_config()
 
