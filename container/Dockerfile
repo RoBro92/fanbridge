@@ -20,4 +20,4 @@ ENV FANBRIDGE_CONFIG=/config/config.yml
 
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD curl -fsS http://localhost:8080/health || exit 1
-CMD ["python","/app/app.py"]
+CMD ["gunicorn","-w","2","-b","0.0.0.0:8080","app:app"]
