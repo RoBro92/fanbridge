@@ -7,7 +7,7 @@ STARTED = time.time()
 CONFIG_PATH = os.environ.get("FANBRIDGE_CONFIG", "/config/config.yml")
 
 DEFAULT_CONFIG = {
-    "mode": "real",               # default to real SMART on Unraid
+    "mode": "real",              
     "poll_interval_seconds": 15,
     "hdd_thresholds": [20,25,28,30,32,34,36,38,40,42],
     "hdd_pwm":        [10,15,20,30,40,50,60,70,85,100],
