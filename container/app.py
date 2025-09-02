@@ -18,6 +18,7 @@ DEFAULT_CONFIG = {
     "override_pwm": 100,
     "fallback_pwm": 10,
     "pwm_hysteresis": 3,
+    "exclude_devices": [],
 }
 
 def _merge_defaults(user_cfg: dict, defaults: dict) -> dict:
@@ -93,32 +94,105 @@ def _is_hdd(dev_name: str) -> bool:
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-# --- SMART helpers (JSON-based, robust) --------------------------------------
-def _enumerate_block_devices() -> list[tuple[str, str]]:
-    """Return (device_path, dev_name) for sdX/sdXX/sdXXX and nvme?n1."""
-    devs = []
-    for pattern in ("/dev/sd?", "/dev/sd??", "/dev/sd???"):
-        for path in sorted(glob.glob(pattern)):
-            devs.append((path, os.path.basename(path)))
-    for path in sorted(glob.glob("/dev/nvme?n1")):
-        devs.append((path, os.path.basename(path)))
-    return devs
+def _smart_json_multi(path: str, name: str) -> tuple[int, dict]:
+    """
+    Try a sequence of device types for maximum compatibility without waking disks.
+    SATA/SAS/USB bridges: try sat → scsi → auto with -n standby.
+    NVMe: use -d nvme; if caps block, we may fall back to sysfs later.
+    """
+    # NVMe controller or namespace
+    if name.startswith("nvme"):
+        cmd = ["smartctl", "-j", "-A", "-d", "nvme", path]
+        cp = _run(cmd)
+        try:
+            data = json.loads(cp.stdout) if cp.stdout else {}
+        except Exception:
+            data = {}
+        return cp.returncode, data
+
+    # SATA/SAS/USB bridges: try multiple transport types
+    for dtype in ("sat", "scsi", "auto"):
+        cmd = ["smartctl", "-j", "-n", "standby", "-A"]
+        if dtype != "auto":
+            cmd += ["-d", dtype]
+        cmd.append(path)
+        cp = _run(cmd)
+        try:
+            data = json.loads(cp.stdout) if cp.stdout else {}
+        except Exception:
+            data = {}
+        if cp.returncode in (0, 2) and data:
+            return cp.returncode, data
+
+    return 1, {}
+
+def _nvme_temp_sysfs(ctrl_or_ns: str) -> int | None:
+    """
+    Fallback: read NVMe temperature from sysfs hwmon when smartctl lacks caps.
+    Returns °C if available else None.
+    """
+    try:
+        # Normalise to controller name e.g. nvme0 from nvme0n1
+        ctrl = ctrl_or_ns.split("n")[0] if "n" in ctrl_or_ns else ctrl_or_ns
+        for hw in glob.glob("/sys/class/hwmon/hwmon*"):
+            devlink = os.path.realpath(os.path.join(hw, "device"))
+            if f"/{ctrl}/" in devlink:
+                tpath = os.path.join(hw, "temp1_input")
+                if os.path.exists(tpath):
+                    val = _read_file(tpath)
+                    if val:
+                        s = val.strip()
+                        if s.isdigit():
+                            v = int(s)
+                            return v // 1000 if v > 1000 else v
+    except Exception:
+        pass
+    return None
 
 def _smart_json(path: str, name: str) -> tuple[int, dict]:
+    return _smart_json_multi(path, name)
+
+# --- SMART helpers (JSON-based, robust) --------------------------------------
+def _enumerate_block_devices() -> list[tuple[str, str]]:
     """
-    Run smartctl in JSON. For SATA use -n standby (no wake); for NVMe regular -A.
-    Returns (returncode, parsed_json_or_empty_dict).
+    Enumerate whole-disk nodes (no partitions). Do not exclude anything here,
+    so the UI can show *all* discoverable devices to the user for opt-out.
     """
-    if name.startswith("nvme"):
-        cmd = ["smartctl", "-j", "-A", path]
-    else:
-        cmd = ["smartctl", "-j", "-n", "standby", "-A", path]
-    cp = _run(cmd)
+    devs: list[tuple[str, str]] = []
+
+    # SATA/SAS whole disks: sda, sdb, sdaa… (exclude names containing digits = partitions)
     try:
-        data = json.loads(cp.stdout) if cp.stdout else {}
+        for entry in sorted(os.listdir("/sys/block")):
+            if entry.startswith("sd"):
+                if any(ch.isdigit() for ch in entry):
+                    continue  # skip partitions like sda1
+                path = f"/dev/{entry}"
+                if os.path.exists(path):
+                    devs.append((path, entry))
     except Exception:
-        data = {}
-    return cp.returncode, data
+        pass
+
+    # NVMe: prefer controller nodes nvmeX; fall back to nvme?n1 if controller node isn't present
+    try:
+        nvme_ctrls = set()
+        for entry in sorted(os.listdir("/sys/block")):
+            if entry.startswith("nvme"):
+                if "p" in entry:
+                    continue  # skip partitions
+                ctrl = entry.split("n")[0] if "n" in entry else entry
+                nvme_ctrls.add(ctrl)
+        for ctrl in sorted(nvme_ctrls):
+            path_ctrl = f"/dev/{ctrl}"
+            if os.path.exists(path_ctrl):
+                devs.append((path_ctrl, ctrl))
+            # Also offer the default namespace if present
+            ns_path = f"/dev/{ctrl}n1"
+            if os.path.exists(ns_path):
+                devs.append((ns_path, f"{ctrl}n1"))
+    except Exception:
+        pass
+
+    return devs
 
 def _smart_state_and_temp(rc: int, data: dict, name: str) -> tuple[str, int | None]:
     """
@@ -164,6 +238,12 @@ def _smart_state_and_temp(rc: int, data: dict, name: str) -> tuple[str, int | No
     if isinstance(nvme_log, dict) and isinstance(nvme_log.get("temperature"), int):
         return ("on", int(nvme_log["temperature"]))
 
+    # Final fallback for NVMe when smartctl cannot read temperature
+    if name.startswith("nvme"):
+        t = _nvme_temp_sysfs(name)
+        if isinstance(t, int):
+            return ("on", t)
+
     return ("on", None)
 
 def _smart_read_drive(path: str, name: str) -> dict:
@@ -172,7 +252,8 @@ def _smart_read_drive(path: str, name: str) -> dict:
     state, temp = _smart_state_and_temp(rc, data, name)
     if state == "N/A" and not data and rc != 0:
         print(f"[fanbridge] smartctl failed for {name} rc={rc}")
-    return {"dev": name, "type": dtype, "temp": temp, "state": state}
+    excluded = name in set(cfg.get("exclude_devices") or [])
+    return {"dev": name, "type": dtype, "temp": temp, "state": state, "excluded": excluded}
 # ---------------------------------------------------------------------------
 
 def map_temp_to_pwm(temp: int, thresholds: list[int], pwms: list[int]) -> int:
@@ -206,11 +287,16 @@ def compute_status():
                 "dev": d.get("name"),
                 "type": d.get("type", "HDD"),
                 "temp": d.get("temp"),
-                "state": "on" if d.get("temp") is not None else "spun down"
+                "state": "on" if d.get("temp") is not None else "spun down",
+                "excluded": False,
             })
 
-    hdd_vals = [d["temp"] for d in drives if d.get("type") == "HDD" and d.get("temp") is not None]
-    ssd_vals = [d["temp"] for d in drives if d.get("type") == "SSD" and d.get("temp") is not None]
+    for d in drives:
+        if d["state"] == "N/A":
+            print(f"[fanbridge] SMART read failed for {d['dev']} (type={d['type']})")
+
+    hdd_vals = [d["temp"] for d in drives if d.get("type") == "HDD" and not d.get("excluded") and d.get("temp") is not None]
+    ssd_vals = [d["temp"] for d in drives if d.get("type") == "SSD" and not d.get("excluded") and d.get("temp") is not None]
 
     def stats(vals):
         if not vals:
