@@ -209,7 +209,7 @@ def _smart_state_and_temp(rc: int, data: dict, name: str) -> tuple[str, int | No
     if rc != 0:
         return ("N/A", None)
 
-    # ATA: temperature via attribute 194 or 190, or via temperature.current
+    # --- ATA path: prefer raw.value; then raw.string first int; then temperature.current
     ata = data.get("ata_smart_attributes") or {}
     table = ata.get("table") or []
     for row in table:
@@ -218,30 +218,51 @@ def _smart_state_and_temp(rc: int, data: dict, name: str) -> tuple[str, int | No
         except Exception:
             continue
         if attr_id in (194, 190):
-            raw = row.get("raw", {})
-            if isinstance(raw, dict) and isinstance(raw.get("value"), int):
-                return ("on", int(raw["value"]))
-            # fallback: try to parse digits from a stringified raw
-            try:
-                txt = str(row.get("raw", ""))
-                digits = "".join(ch for ch in txt if ch.isdigit())
-                if digits:
-                    return ("on", int(digits[:2]))
-            except Exception:
-                pass
-    temp_block = data.get("temperature") or {}
-    if isinstance(temp_block, dict) and isinstance(temp_block.get("current"), int):
-        return ("on", int(temp_block["current"]))
+            raw = row.get("raw")
+            # Case 1: dict form with an integer 'value'
+            if isinstance(raw, dict):
+                val = raw.get("value")
+                if isinstance(val, int):
+                    temp = val
+                    if 0 <= temp <= 120:
+                        return ("on", temp)
+                # maybe a 'string' like "39 (Min/Max 20/60)"
+                s = raw.get("string")
+                if isinstance(s, str):
+                    # take first integer token
+                    for part in s.split():
+                        if part.isdigit():
+                            temp = int(part)
+                            if 0 <= temp <= 120:
+                                return ("on", temp)
+                            break
+            # Case 2: raw is already a string
+            if isinstance(raw, str):
+                for part in raw.split():
+                    if part.isdigit():
+                        temp = int(part)
+                        if 0 <= temp <= 120:
+                            return ("on", temp)
+                        break
 
-    # NVMe: temperature in temperature.current or nvme_smart_health_information_log.temperature
+    # Some firmwares also expose temperature.current
+    tblock = data.get("temperature") or {}
+    if isinstance(tblock, dict):
+        t = tblock.get("current")
+        if isinstance(t, int) and 0 <= t <= 120:
+            return ("on", t)
+
+    # --- NVMe path: typical locations
     nvme_log = data.get("nvme_smart_health_information_log") or {}
-    if isinstance(nvme_log, dict) and isinstance(nvme_log.get("temperature"), int):
-        return ("on", int(nvme_log["temperature"]))
+    if isinstance(nvme_log, dict):
+        t = nvme_log.get("temperature")
+        if isinstance(t, int) and 0 <= t <= 120:
+            return ("on", t)
 
     # Final fallback for NVMe when smartctl cannot read temperature
     if name.startswith("nvme"):
         t = _nvme_temp_sysfs(name)
-        if isinstance(t, int):
+        if isinstance(t, int) and 0 <= t <= 120:
             return ("on", t)
 
     return ("on", None)
@@ -279,6 +300,8 @@ def compute_status():
             drives = []
         else:
             for path, name in _enumerate_block_devices():
+                if not name:
+                    continue  # guard against any bogus blank entries
                 drives.append(_smart_read_drive(path, name))
     else:
         # (Optional) keep sim path if you ever flip it back for Mac testing
