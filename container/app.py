@@ -173,6 +173,7 @@ def _read_disks_ini() -> list[dict]:
     for section in cp.sections():
         # Accept any section that provides a device field (diskX, parity, cache, etc.)
         dev = _unquote(cp.get(section, "device", fallback=""))
+        slot = _unquote(cp.get(section, "name", fallback=""))
         if not dev:
             continue
 
@@ -209,6 +210,7 @@ def _read_disks_ini() -> list[dict]:
             state = "spun down" if spundown else ("on" if temp is not None else "N/A")
         drives.append({
             "dev": dclean,
+            "slot": slot,
             "type": dtype,
             "temp": temp,
             "state": state,
@@ -490,7 +492,7 @@ def index():
           rows.innerHTML = '';
           (j.drives || []).forEach(d => {{
             const tr = document.createElement('tr');
-            const tdDev = document.createElement('td'); tdDev.textContent = d.dev || '—';
+            const tdDev = document.createElement('td'); tdDev.textContent = d.dev ? (d.slot ? (d.dev + ' (' + d.slot + ')') : d.dev) : '—';
             const tdType = document.createElement('td'); tdType.textContent = d.type || '—';
             const tdState = document.createElement('td'); tdState.textContent = d.state || '—';
             const tdTemp = document.createElement('td'); tdTemp.textContent = fmt(d.temp);
@@ -500,8 +502,8 @@ def index():
             rows.appendChild(tr);
           }});
           const hs = j.hdd || {{}}, ss = j.ssd || {{}};
-          document.getElementById('hddstats').textContent = `${{fmt(hs.avg)}} / ${{fmt(hs.min)}} / ${{fmt(hs.max)}}  (n=${{fmt(hs.count)}})`;
-          document.getElementById('ssdstats').textContent = `${{fmt(ss.avg)}} / ${{fmt(ss.min)}} / ${{fmt(ss.max)}}  (n=${{fmt(ss.count)}})`;
+          document.getElementById('hddstats').textContent = (fmt(hs.avg) + ' / ' + fmt(hs.min) + ' / ' + fmt(hs.max) + '  (n=' + fmt(hs.count) + ')');
+          document.getElementById('ssdstats').textContent = (fmt(ss.avg) + ' / ' + fmt(ss.min) + ' / ' + fmt(ss.max) + '  (n=' + fmt(ss.count) + ')');
           // populate override inputs
           if (typeof j.override_hdd_c !== 'undefined') document.getElementById('hddovr').value = j.override_hdd_c;
           if (typeof j.override_ssd_c !== 'undefined') document.getElementById('ssdovr').value = j.override_ssd_c;
