@@ -23,7 +23,7 @@ if load_dotenv:
         except Exception:
             pass
 
-APP_VERSION = os.environ.get("FANBRIDGE_VERSION", "dev")
+APP_VERSION = os.environ.get("FANBRIDGE_VERSION") or os.environ.get("VERSION") or "dev"
 
 app = Flask(__name__)
 STARTED = time.time()
