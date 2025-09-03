@@ -21,6 +21,8 @@ DEFAULT_CONFIG = {
     "fallback_pwm": 10,
     "pwm_hysteresis": 3,
     "exclude_devices": [],
+    "idle_cutoff_hdd_c": 28,  # below this, HDD fan is 0%
+    "idle_cutoff_ssd_c": 35,  # below this, SSD fan is 0%
     "sim": { "drives": [] },        # optional: for non‑Unraid local testing
 }
 
@@ -282,6 +284,17 @@ def compute_status():
     else:
         pwm_hdd = map_temp_to_pwm(hdd["avg"], cfg["hdd_thresholds"], cfg["hdd_pwm"]) if hdd["count"] else 0
         pwm_ssd = map_temp_to_pwm(ssd["avg"], cfg["ssd_thresholds"], cfg["ssd_pwm"]) if ssd["count"] else 0
+        # Idle cutoffs: force 0% if averages are below configured thresholds
+        try:
+            if hdd["count"] and hdd["avg"] < int(cfg.get("idle_cutoff_hdd_c", 0)):
+                pwm_hdd = 0
+        except Exception:
+            pass
+        try:
+            if ssd["count"] and ssd["avg"] < int(cfg.get("idle_cutoff_ssd_c", 0)):
+                pwm_ssd = 0
+        except Exception:
+            pass
         recommended_pwm = max(pwm_hdd, pwm_ssd)
         if hdd["count"] == 0 and ssd["count"] == 0:
             recommended_pwm = int(cfg.get("fallback_pwm", 10))
@@ -300,6 +313,12 @@ def compute_status():
         "override_hdd_c": int(cfg.get("single_override_hdd_c", 45)),
         "override_ssd_c": int(cfg.get("single_override_ssd_c", 60)),
         "exclude_devices": sorted(list(set(cfg.get("exclude_devices") or []))),
+        "hdd_thresholds": cfg.get("hdd_thresholds", []),
+        "hdd_pwm": cfg.get("hdd_pwm", []),
+        "ssd_thresholds": cfg.get("ssd_thresholds", []),
+        "ssd_pwm": cfg.get("ssd_pwm", []),
+        "idle_cutoff_hdd_c": int(cfg.get("idle_cutoff_hdd_c", 0)),
+        "idle_cutoff_ssd_c": int(cfg.get("idle_cutoff_ssd_c", 0)),
         "recommended_pwm": int(recommended_pwm),
         "override": override,
         "mode": mode,
@@ -363,6 +382,41 @@ def api_settings():
     save_config(c)
     return jsonify({"ok": True, "changed": changed})
 
+# --------- API: Curves and idle cutoffs ---------
+@app.post("/api/curves")
+def api_curves():
+    data = request.get_json(force=True, silent=True) or {}
+    c = load_config()
+    changed = {}
+    def set_list_int(key):
+        v = data.get(key)
+        if isinstance(v, list):
+            try:
+                arr = [int(x) for x in v][:10]
+                if len(arr) < 10:
+                    arr += arr[-1:] * (10 - len(arr)) if arr else [0]*10
+                c[key] = arr
+                changed[key] = arr
+            except Exception:
+                pass
+    def set_int_key(key):
+        v = data.get(key)
+        if v is None:
+            return
+        try:
+            c[key] = int(v)
+            changed[key] = int(v)
+        except Exception:
+            pass
+    set_list_int("hdd_thresholds")
+    set_list_int("hdd_pwm")
+    set_list_int("ssd_thresholds")
+    set_list_int("ssd_pwm")
+    set_int_key("idle_cutoff_hdd_c")
+    set_int_key("idle_cutoff_ssd_c")
+    save_config(c)
+    return jsonify({"ok": True, "changed": changed})
+
 @app.get("/")
 def index():
     # Use configured poll interval, clamp 3–60s
@@ -405,8 +459,15 @@ def index():
         input[type="number"] {{ width: 72px; padding:4px 6px; }}
         button {{ padding:6px 10px; border:1px solid #ccc; background:#f6f8fa; border-radius:6px; cursor:pointer; }}
         button:hover {{ background:#eef2f6; }}
+        /* Centre + tighten specific columns */
+        th.type, td.type {{ text-align: center; width: 90px; }}
+        th.state, td.state {{ text-align: center; width: 90px; }}
+        th.temp, td.temp {{ text-align: center; width: 110px; }}
+        th.inc, td.inc {{ text-align: center; width: 90px; }}
         td.inc {{ text-align:center; }}
         input.incl {{ transform: scale(1.3); accent-color: #16a34a; }}
+        .grid#curveH, .grid#curveS {{ grid-template-columns: repeat(10, minmax(80px, 1fr)); }}
+        .grid#curveH input, .grid#curveS input {{ width: 70px; }}
       </style>
     </head>
     <body>
@@ -417,17 +478,17 @@ def index():
         <span class="pill">refresh: every {pi}s</span>
         <span id="mtime" class="pill">disks.ini: …</span>
         <span class="small muted" id="updated">last update: …</span>
-        <a href="/api/status" class="right small">API</a>
+        <a href="/api/status" class="right small" style="margin-left:12px;">API</a><a href="/health" class="right small" style="margin-left:12px;">Health</a>
       </div>
 
       <table id="tbl">
         <thead>
           <tr>
             <th>Device</th>
-            <th>Type</th>
-            <th>State</th>
-            <th>Temp (°C)</th>
-            <th class="small">Included</th>
+            <th class="type">Type</th>
+            <th class="state">State</th>
+            <th class="temp">Temp (°C)</th>
+            <th class="inc">Included</th>
           </tr>
         </thead>
         <tbody id="rows">
@@ -451,6 +512,17 @@ def index():
           <label>SSD override (°C): <input type="number" id="ssdovr" min="40" max="90" step="1"></label>
           <button id="savebtn">Save overrides</button>
         </div>
+        <div style="margin-top:12px;" class="inputs">
+          <label>HDD idle cutoff (°C): <input type="number" id="idleH" min="0" max="80" step="1"></label>
+          <label>SSD idle cutoff (°C): <input type="number" id="idleS" min="0" max="100" step="1"></label>
+        </div>
+        <div class="panel" style="margin-top:12px;">
+          <h2 style="margin-bottom:8px;">Fan curves (10 steps)</h2>
+          <div class="small muted" style="margin-bottom:6px;">Each row is Threshold °C → PWM % (left to right). Adjust both HDD and SSD separately.</div>
+          <div class="grid" id="curveH"></div>
+          <div class="grid" id="curveS" style="margin-top:10px;"></div>
+          <div class="inputs" style="margin-top:10px;"><button id="savecurves">Save fan curves</button></div>
+        </div>
       </div>
 
       <div class="footer small muted">
@@ -464,6 +536,7 @@ def index():
       let OVERRIDE_HDD = 45;
       let OVERRIDE_SSD = 60;
       const WARN_DELTA = 5; // orange when within 5°C of override
+      let HTH = [], HPW = [], STH = [], SPW = [];
 
       const clsForTemp = (t, type) => {{
         if (t === null || t === undefined) return "muted";
@@ -486,15 +559,20 @@ def index():
           // sync dynamic thresholds from server so colours reflect current settings
           if (typeof j.override_hdd_c === 'number') OVERRIDE_HDD = j.override_hdd_c;
           if (typeof j.override_ssd_c === 'number') OVERRIDE_SSD = j.override_ssd_c;
+          if (Array.isArray(j.hdd_thresholds)) HTH = j.hdd_thresholds.slice(0,10);
+          if (Array.isArray(j.hdd_pwm)) HPW = j.hdd_pwm.slice(0,10);
+          if (Array.isArray(j.ssd_thresholds)) STH = j.ssd_thresholds.slice(0,10);
+          if (Array.isArray(j.ssd_pwm)) SPW = j.ssd_pwm.slice(0,10);
+          if (typeof j.idle_cutoff_hdd_c === 'number') document.getElementById('idleH').value = j.idle_cutoff_hdd_c;
+          if (typeof j.idle_cutoff_ssd_c === 'number') document.getElementById('idleS').value = j.idle_cutoff_ssd_c;
           const rows = document.getElementById('rows');
           rows.innerHTML = '';
           (j.drives || []).forEach(d => {{
             const tr = document.createElement('tr');
             const tdDev = document.createElement('td'); tdDev.textContent = d.dev ? (d.slot ? (d.dev + ' (' + d.slot + ')') : d.dev) : '—';
-            const tdType = document.createElement('td'); tdType.textContent = d.type || '—';
-            const tdState = document.createElement('td'); tdState.textContent = d.state || '—';
-            const tdTemp = document.createElement('td'); tdTemp.textContent = fmt(d.temp);
-            tdTemp.className = clsForTemp(d.temp, d.type);
+            const tdType = document.createElement('td'); tdType.textContent = d.type || '—'; tdType.className = 'type';
+            const tdState = document.createElement('td'); tdState.textContent = d.state || '—'; tdState.className = 'state';
+            const tdTemp = document.createElement('td'); tdTemp.textContent = fmt(d.temp); tdTemp.className = 'temp ' + clsForTemp(d.temp, d.type);
             const tdInc = document.createElement('td'); tdInc.className = 'inc';
             const cbInc = document.createElement('input');
             cbInc.type = 'checkbox';
@@ -519,6 +597,19 @@ def index():
           // populate override inputs
           if (typeof j.override_hdd_c !== 'undefined') document.getElementById('hddovr').value = j.override_hdd_c;
           if (typeof j.override_ssd_c !== 'undefined') document.getElementById('ssdovr').value = j.override_ssd_c;
+          // populate fan curve editors
+          const ch = document.getElementById('curveH'); ch.innerHTML = '';
+          const cs = document.getElementById('curveS'); cs.innerHTML = '';
+          for (let i=0;i<10;i++) {{
+            const th = document.createElement('input'); th.type='number'; th.min='0'; th.max='100'; th.step='1'; th.value = (HTH[i]!==undefined?HTH[i]:0);
+            const pw = document.createElement('input'); pw.type='number'; pw.min='0'; pw.max='100'; pw.step='1'; pw.value = (HPW[i]!==undefined?HPW[i]:0);
+            const wrap1 = document.createElement('div'); wrap1.appendChild(th); wrap1.appendChild(pw); ch.appendChild(wrap1);
+          }}
+          for (let i=0;i<10;i++) {{
+            const th = document.createElement('input'); th.type='number'; th.min='0'; th.max='100'; th.step='1'; th.value = (STH[i]!==undefined?STH[i]:0);
+            const pw = document.createElement('input'); pw.type='number'; pw.min='0'; pw.max='100'; pw.step='1'; pw.value = (SPW[i]!==undefined?SPW[i]:0);
+            const wrap2 = document.createElement('div'); wrap2.appendChild(th); wrap2.appendChild(pw); cs.appendChild(wrap2);
+          }}
         }} catch (e) {{
           console.error(e);
         }}
@@ -535,6 +626,35 @@ def index():
             body: JSON.stringify({{
               single_override_hdd_c: isNaN(h) ? undefined : h,
               single_override_ssd_c: isNaN(s) ? undefined : s
+            }})
+          }});
+          refresh();
+        }} catch (err) {{ console.error(err); }}
+      }});
+      document.getElementById('savecurves').addEventListener('click', async () => {{
+        const ch = document.getElementById('curveH').querySelectorAll('div');
+        const cs = document.getElementById('curveS').querySelectorAll('div');
+        const HTH2 = [], HPW2 = [], STH2 = [], SPW2 = [];
+        ch.forEach(div => {{
+          const ins = div.querySelectorAll('input');
+          HTH2.push(parseInt(ins[0].value||'0',10));
+          HPW2.push(parseInt(ins[1].value||'0',10));
+        }});
+        cs.forEach(div => {{
+          const ins = div.querySelectorAll('input');
+          STH2.push(parseInt(ins[0].value||'0',10));
+          SPW2.push(parseInt(ins[1].value||'0',10));
+        }});
+        const ih = parseInt(document.getElementById('idleH').value||'0',10);
+        const isv = parseInt(document.getElementById('idleS').value||'0',10);
+        try {{
+          await fetch('/api/curves', {{
+            method: 'POST',
+            headers: {{ 'Content-Type': 'application/json' }},
+            body: JSON.stringify({{
+              hdd_thresholds: HTH2, hdd_pwm: HPW2,
+              ssd_thresholds: STH2, ssd_pwm: SPW2,
+              idle_cutoff_hdd_c: ih, idle_cutoff_ssd_c: isv
             }})
           }});
           refresh();
