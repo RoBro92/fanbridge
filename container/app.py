@@ -421,8 +421,8 @@ def index():
       <title>fanbridge</title>
       <style>
         body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }
-        :root { --bg:#ffffff; --fg:#111827; --muted:#6b7280; --border:#e5e7eb; --thbg:#f6f8fa; --pillbg:#fafafa; }
-        body.dark { --bg:#0f172a; --fg:#e5e7eb; --muted:#94a3b8; --border:#334155; --thbg:#111827; --pillbg:#1f2937; }
+        :root { --bg:#ffffff; --fg:#111827; --muted:#6b7280; --border:#e5e7eb; --thbg:#f6f8fa; --pillbg:#fafafa; --cardbg:#ffffff; }
+        body.dark { --bg:#0f172a; --fg:#e5e7eb; --muted:#94a3b8; --border:#334155; --thbg:#111827; --pillbg:#1f2937; --cardbg:#0b1220; }
         body { background: var(--bg); color: var(--fg); }
         .muted { color: var(--muted); }
         table, th, td { border-color: var(--border); }
@@ -444,7 +444,7 @@ def index():
         .right { float:right; }
         .footer { margin-top: 16px; }
         code { background:#f6f8fa; padding:2px 6px; border-radius:4px; }
-        .panel { border:1px solid #ddd; border-radius:8px; padding:12px; background:#fff; max-width: 880px; margin-top:16px; }
+        .panel { border:1px solid var(--border); border-radius:8px; padding:12px; background: var(--cardbg); max-width: 880px; margin-top:16px; }
         .panel h2 { margin:0 0 8px; font-size:16px; }
         .chk { display:inline-flex; align-items:center; gap:6px; margin:6px 12px 6px 0; }
         .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:6px 12px; }
@@ -460,6 +460,19 @@ def index():
         .grid#curveH_th, .grid#curveH_pw, .grid#curveS_th, .grid#curveS_pw { grid-template-columns: repeat(auto-fit, minmax(70px, 1fr)); }
         .grid#curveH_th input, .grid#curveH_pw input, .grid#curveS_th input, .grid#curveS_pw input { width: 64px; }
         .rowlabel { min-width: 110px; }
+        /* Form controls follow theme */
+        input, select {
+          background: var(--bg);
+          color: var(--fg);
+          border: 1px solid var(--border);
+        }
+        input[disabled], select[disabled] { opacity: .75; }
+
+        /* Ensure temp cells don't inherit odd backgrounds in dark mode */
+        td.temp.ok, td.temp.warn, td.temp.crit {
+          background: transparent !important;
+          text-shadow: none;
+        }
       </style>
     </head>
     <body>
