@@ -1,10 +1,32 @@
 from flask import Flask, jsonify, request
-import os, time, yaml, json, configparser, glob
+import os, time, yaml, json, configparser, glob, pathlib
+
+# Load environment variables from possible .env locations
+try:
+    from dotenv import load_dotenv  # type: ignore
+except Exception:
+    load_dotenv = None  # fallback if not installed
+
+# Resolve paths relative to this file
+_BASE = pathlib.Path(__file__).resolve().parent
+_PROJECT_ROOT = _BASE.parent  # repo root if container copies to /app
+
+if load_dotenv:
+    # Load order: project root .env, /app/.env, and /config/.env (mounted on Unraid)
+    for _p in (
+        _PROJECT_ROOT / ".env",
+        _BASE / ".env",
+        pathlib.Path("/config/.env"),
+    ):
+        try:
+            load_dotenv(str(_p), override=False)
+        except Exception:
+            pass
+
+APP_VERSION = os.environ.get("FANBRIDGE_VERSION", "dev")
 
 app = Flask(__name__)
 STARTED = time.time()
-
-APP_VERSION = os.environ.get("FANBRIDGE_VERSION", "dev")
 
 # Paths
 CONFIG_PATH = os.environ.get("FANBRIDGE_CONFIG", "/config/config.yml")
@@ -311,7 +333,7 @@ def compute_status():
         "recommended_pwm": int(recommended_pwm),
         "override": override,
         "mode": mode,
-        "": os.environ.get("FANBRIDGE_VERSION", "0.1.0"),
+        "version": APP_VERSION,
         "disks_ini_mtime": disks_mtime,
     }
 
