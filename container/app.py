@@ -286,7 +286,7 @@ def compute_status():
         "recommended_pwm": int(recommended_pwm),
         "override": override,
         "mode": mode,
-        "version": os.environ.get("FANBRIDGE_VERSION", "0.0.1"),
+        "version": os.environ.get("FANBRIDGE_VERSION", "0.0.2"),
         "disks_ini_mtime": disks_mtime,
     }
 
