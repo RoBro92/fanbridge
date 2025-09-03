@@ -187,10 +187,13 @@ def _read_disks_ini() -> list[dict]:
         # spundown = "1" means disk is sleeping
         spundown = _unquote(cp.get(section, "spundown", fallback="0")) == "1"
 
-        # If sysfs clearly indicates activity, prefer it over disks.ini lag
+        # Reconcile with sysfs hints conservatively:
+        # - If disks.ini says spun down (spundown==True), KEEP it (do not override to up).
+        # - If disks.ini says active (spundown==False) but sysfs clearly says suspended, flip to spun down.
         ss = _spin_state_from_sysfs(dev)
-        if ss is False:
-            spundown = False
+        if (spundown is False) and (ss is True):
+            spundown = True
+        # Otherwise leave 'spundown' as reported by disks.ini.
 
         # If temp is unknown for NVMe but device is active, try sysfs
         dclean = _unquote(dev)
