@@ -11,17 +11,17 @@ DISKS_INI = "/unraid/disks.ini"   # bind-mount to /var/local/emhttp/disks.ini on
 # Defaults (UI can change via future /api/config)
 DEFAULT_CONFIG = {
     "poll_interval_seconds": 7,     # UI refresh; clamped 3–60s
-    "hdd_thresholds": [20,25,28,30,32,34,36,38,40,42],
-    "hdd_pwm":        [10,15,20,30,40,50,60,70,85,100],
-    "ssd_thresholds": [25,30,35,38,40,42,45,48,50,55],
-    "ssd_pwm":        [10,10,15,25,35,45,55,65,80,95],
+    "hdd_thresholds": [30,32,35,38,40,42,44,45],
+    "hdd_pwm":        [0,20,30,40,50,60,80,100],
+    "ssd_thresholds": [35,40,45,48,50,52,54,55],
+    "ssd_pwm":        [0,20,30,40,55,70,85,100],
     "single_override_hdd_c": 45,
     "single_override_ssd_c": 60,
     "override_pwm": 100,
     "fallback_pwm": 10,
     "pwm_hysteresis": 3,
     "exclude_devices": [],
-    "idle_cutoff_hdd_c": 28,  # below this, HDD fan is 0%
+    "idle_cutoff_hdd_c": 30,  # below this, HDD fan is 0%
     "idle_cutoff_ssd_c": 35,  # below this, SSD fan is 0%
     "sim": { "drives": [] },        # optional: for non‑Unraid local testing
 }
@@ -494,7 +494,8 @@ def index():
       </table>
 
       <div class="panel">
-        <h2>Configuration</h2>
+        <h3>Configuration</h3>
+        <h2>Single Drive Temp Overrides</h2>
         <div class="inputs">
           <label>HDD override (°C): <input type="number" id="hddovr" min="30" max="70" step="1"></label>
           <label>SSD override (°C): <input type="number" id="ssdovr" min="40" max="90" step="1"></label>
@@ -502,10 +503,10 @@ def index():
           <button id="discardbtn" style="display:none;">Discard</button>
         </div>
         <div class="panel" style="margin-top:12px;">
-          <h2 style="margin-bottom:8px;">Fan curves (10 steps)</h2>
+          <h3 style="margin-bottom:8px;">Fan curves (10 steps)</h3>
           <div class="small muted" style="margin-bottom:10px;">Set the mapping from average pool temperature to PWM. Use 10 steps for each pool. Left to right = increasing temperature.</div>
 
-          <h3 style="margin:6px 0 6px;">HDD fan curve</h3>
+          <h2 style="margin:6px 0 6px;">HDD fan curve</h2>
           <div class="inputs" style="align-items:flex-start;">
             <div class="rowlabel small muted" style="width:130px;">Thresholds (°C)</div>
             <div class="grid" id="curveH_th"></div>
@@ -515,7 +516,7 @@ def index():
             <div class="grid" id="curveH_pw"></div>
           </div>
 
-          <h3 style="margin:12px 0 6px;">SSD fan curve</h3>
+          <h2 style="margin:12px 0 6px;">SSD fan curve</h2>
           <div class="inputs" style="align-items:flex-start;">
             <div class="rowlabel small muted" style="width:130px;">Thresholds (°C)</div>
             <div class="grid" id="curveS_th"></div>
