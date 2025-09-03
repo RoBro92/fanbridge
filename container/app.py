@@ -405,6 +405,8 @@ def index():
         input[type="number"] {{ width: 72px; padding:4px 6px; }}
         button {{ padding:6px 10px; border:1px solid #ccc; background:#f6f8fa; border-radius:6px; cursor:pointer; }}
         button:hover {{ background:#eef2f6; }}
+        td.inc {{ text-align:center; }}
+        input.incl {{ transform: scale(1.3); accent-color: #16a34a; }}
       </style>
     </head>
     <body>
@@ -425,7 +427,7 @@ def index():
             <th>Type</th>
             <th>State</th>
             <th>Temp (°C)</th>
-            <th class="small">Excluded</th>
+            <th class="small">Included</th>
           </tr>
         </thead>
         <tbody id="rows">
@@ -448,10 +450,6 @@ def index():
           <label>HDD override (°C): <input type="number" id="hddovr" min="30" max="70" step="1"></label>
           <label>SSD override (°C): <input type="number" id="ssdovr" min="40" max="90" step="1"></label>
           <button id="savebtn">Save overrides</button>
-        </div>
-        <div style="margin-top:10px;">
-          <strong>Exclude devices</strong>
-          <div id="drivelist" class="grid"></div>
         </div>
       </div>
 
@@ -497,8 +495,22 @@ def index():
             const tdState = document.createElement('td'); tdState.textContent = d.state || '—';
             const tdTemp = document.createElement('td'); tdTemp.textContent = fmt(d.temp);
             tdTemp.className = clsForTemp(d.temp, d.type);
-            const tdEx = document.createElement('td'); tdEx.textContent = d.excluded ? 'yes' : 'no'; tdEx.className='small muted';
-            tr.append(tdDev, tdType, tdState, tdTemp, tdEx);
+            const tdInc = document.createElement('td'); tdInc.className = 'inc';
+            const cbInc = document.createElement('input');
+            cbInc.type = 'checkbox';
+            cbInc.className = 'incl';
+            cbInc.checked = !d.excluded; // checked means INCLUDED in calculations
+            cbInc.onchange = async (e) => {{
+              try {{
+                await fetch('/api/exclude', {{
+                  method: 'POST',
+                  headers: {{ 'Content-Type': 'application/json' }},
+                  body: JSON.stringify({{ dev: d.dev, excluded: !e.target.checked }})
+                }});
+              }} catch (err) {{ console.error(err); }}
+            }};
+            tdInc.appendChild(cbInc);
+            tr.append(tdDev, tdType, tdState, tdTemp, tdInc);
             rows.appendChild(tr);
           }});
           const hs = j.hdd || {{}}, ss = j.ssd || {{}};
@@ -507,28 +519,6 @@ def index():
           // populate override inputs
           if (typeof j.override_hdd_c !== 'undefined') document.getElementById('hddovr').value = j.override_hdd_c;
           if (typeof j.override_ssd_c !== 'undefined') document.getElementById('ssdovr').value = j.override_ssd_c;
-          // populate exclude list
-          const dl = document.getElementById('drivelist');
-          dl.innerHTML = '';
-          (j.drives || []).forEach(d => {{
-            const wrap = document.createElement('label');
-            wrap.className = 'chk';
-            const cb = document.createElement('input');
-            cb.type = 'checkbox';
-            cb.checked = !!d.excluded;
-            cb.onchange = async (e) => {{
-              try {{
-                await fetch('/api/exclude', {{
-                  method: 'POST',
-                  headers: {{ 'Content-Type': 'application/json' }},
-                  body: JSON.stringify({{ dev: d.dev, excluded: e.target.checked }})
-                }});
-              }} catch (err) {{ console.error(err); }}
-            }};
-            const txt = document.createElement('span'); txt.textContent = d.dev;
-            wrap.appendChild(cb); wrap.appendChild(txt);
-            dl.appendChild(wrap);
-          }});
         }} catch (e) {{
           console.error(e);
         }}
