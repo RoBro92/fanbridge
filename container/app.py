@@ -1,5 +1,5 @@
 from flask import Flask, jsonify
-import os, time, yaml, json, configparser
+import os, time, yaml, json, configparser, glob
 
 app = Flask(__name__)
 STARTED = time.time()
@@ -85,6 +85,53 @@ def _read_file(path: str) -> str | None:
     except Exception:
         return None
 
+def _sysfs(dev: str, rel: str) -> str | None:
+    return _read_file(f"/sys/block/{dev}/{rel}")
+
+def _spin_state_from_sysfs(dev: str) -> bool | None:
+    """
+    Returns False if clearly active, True if clearly spun down, or None if unknown.
+    We consult a couple of sysfs hints:
+      - device/state: often "running" for active devices
+      - power/runtime_status: "active" vs "suspended"
+    """
+    st = _sysfs(dev, "device/state")
+    if st:
+        s = st.lower()
+        if "running" in s or "active" in s:
+            return False
+        if "offline" in s or "suspended" in s or "standby" in s:
+            return True
+
+    rs = _sysfs(dev, "power/runtime_status")
+    if rs:
+        r = rs.lower()
+        if "active" in r:
+            return False
+        if "suspend" in r:
+            return True
+    return None
+
+def _nvme_temp_sysfs(dev: str) -> int | None:
+    """
+    Try to grab NVMe temp from sysfs when disks.ini has '*' (unknown).
+    We look for hwmon temp1_input attached to this nvme device.
+    """
+    # nvme0n1 -> nvme0
+    ctrl = dev.split("n", 1)[0]
+    # Typical paths: /sys/class/nvme/nvme0/device/hwmon/hwmonX/temp1_input
+    candidates = glob.glob(f"/sys/class/nvme/{ctrl}/device/hwmon/hwmon*/temp*_input")
+    for p in candidates:
+        val = _read_file(p)
+        if val and val.strip().isdigit():
+            # value is in millidegrees or degrees depending on platform; handle both
+            n = int(val.strip())
+            if n > 1000:
+                n = n // 1000
+            if 0 <= n <= 120:
+                return n
+    return None
+
 def _is_hdd(dev_name: str) -> bool:
     # NVMe → SSD, else use rotational when available, default HDD
     if dev_name.startswith("nvme"):
@@ -129,6 +176,17 @@ def _read_disks_ini() -> list[dict]:
 
         # spundown = "1" means disk is sleeping
         spundown = cp.get(section, "spundown", fallback="0").strip() == "1"
+
+        # If sysfs clearly indicates activity, prefer it over disks.ini lag
+        ss = _spin_state_from_sysfs(dev)
+        if ss is False:
+            spundown = False
+
+        # If temp is unknown for NVMe but device is active, try sysfs
+        if temp is None and dev.startswith("nvme") and not spundown:
+            t_nv = _nvme_temp_sysfs(dev)
+            if isinstance(t_nv, int):
+                temp = t_nv
 
         dtype = "SSD" if not _is_hdd(dev) else "HDD"
         state = "spun down" if spundown else ("on" if temp is not None else "N/A")
@@ -203,6 +261,13 @@ def compute_status():
         if hdd["count"] == 0 and ssd["count"] == 0:
             recommended_pwm = int(cfg.get("fallback_pwm", 10))
 
+    disks_mtime = None
+    try:
+        if os.path.exists(DISKS_INI):
+            disks_mtime = int(os.path.getmtime(DISKS_INI))
+    except Exception:
+        pass
+
     return {
         "drives": drives,
         "hdd": hdd,
@@ -211,6 +276,7 @@ def compute_status():
         "override": override,
         "mode": mode,
         "version": os.environ.get("FANBRIDGE_VERSION", "0.0.1"),
+        "disks_ini_mtime": disks_mtime,
     }
 
 @app.get("/health")
@@ -270,6 +336,7 @@ def index():
         <span id="mode" class="pill">mode: …</span>
         <span id="ver" class="pill">version: …</span>
         <span class="pill">refresh: every {pi}s</span>
+        <span id="mtime" class="pill">disks.ini: …</span>
         <span class="small muted" id="updated">last update: …</span>
         <a href="/api/status" class="right small">API</a>
       </div>
@@ -320,6 +387,8 @@ def index():
           document.getElementById('pwm').textContent = (j.recommended_pwm ?? '—') + '%';
           const now = new Date();
           document.getElementById('updated').textContent = 'last update: ' + now.toLocaleString();
+          const mt = j.disks_ini_mtime ? new Date(j.disks_ini_mtime * 1000).toLocaleTimeString() : 'n/a';
+          document.getElementById('mtime').textContent = 'disks.ini: ' + mt;
           const rows = document.getElementById('rows');
           rows.innerHTML = '';
           (j.drives || []).forEach(d => {{
