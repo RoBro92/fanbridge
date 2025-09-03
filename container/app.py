@@ -432,6 +432,7 @@ def index():
         .muted { color: #777; }
         .flex { display:flex; gap:12px; align-items:center; flex-wrap: wrap; }
         .pill { border:1px solid #ddd; border-radius:999px; padding:3px 10px; background:#fafafa; font-size: 12px; }
+        .pill.warn { border-color:#f59e0b; background:#fff7ed; color:#92400e; }
         .small { font-size: 12px; }
         .right { float:right; }
         .footer { margin-top: 16px; }
@@ -465,6 +466,7 @@ def index():
         <span id="mtime" class="pill">disks.ini: …</span>
         <span class="small muted" id="updated">last update: …</span>
         <a href="/api/status" class="right small" style="margin-left:12px;">API</a><a href="/health" class="right small" style="margin-left:12px;">Health</a>
+        <span id="dirtyFlag" class="pill warn" style="display:none;">Unsaved changes</span>
       </div>
 
       <table id="tbl">
@@ -497,6 +499,7 @@ def index():
           <label>HDD override (°C): <input type="number" id="hddovr" min="30" max="70" step="1"></label>
           <label>SSD override (°C): <input type="number" id="ssdovr" min="40" max="90" step="1"></label>
           <button id="savebtn">Save overrides</button>
+          <button id="discardbtn" style="display:none;">Discard</button>
         </div>
         <div class="panel" style="margin-top:12px;">
           <h2 style="margin-bottom:8px;">Fan curves (10 steps)</h2>
@@ -522,7 +525,10 @@ def index():
             <div class="grid" id="curveS_pw"></div>
           </div>
 
-          <div class="inputs" style="margin-top:10px;"><button id="savecurves">Save fan curves</button></div>
+          <div class="inputs" style="margin-top:10px;">
+            <button id="savecurves">Save fan curves</button>
+            <button id="discardcurves" style="display:none;">Discard</button>
+          </div>
         </div>
       </div>
 
@@ -536,6 +542,16 @@ def index():
       let OVERRIDE_SSD = 60;
       const WARN_DELTA = 5; // orange when within 5°C of override
       let HTH = [], HPW = [], STH = [], SPW = [];
+      let DIRTY_OVR = false;   // overrides edited but not saved
+      let DIRTY_CURVES = false; // fan curves edited but not saved
+
+      function setDirty(which, v=true){
+        if(which === 'ovr') DIRTY_OVR = v; else if(which === 'curves') DIRTY_CURVES = v;
+        const any = DIRTY_OVR || DIRTY_CURVES;
+        document.getElementById('dirtyFlag').style.display = any ? '' : 'none';
+        document.getElementById('discardbtn').style.display = DIRTY_OVR ? '' : 'none';
+        document.getElementById('discardcurves').style.display = DIRTY_CURVES ? '' : 'none';
+      }
 
       const clsForTemp = (t, type) => {
         if (t === null || t === undefined) return "muted";
@@ -591,25 +607,25 @@ def index():
           const hs = j.hdd || {}, ss = j.ssd || {};
           document.getElementById('hddstats').textContent = (fmt(hs.avg) + ' / ' + fmt(hs.min) + ' / ' + fmt(hs.max) + '  (n=' + fmt(hs.count) + ')');
           document.getElementById('ssdstats').textContent = (fmt(ss.avg) + ' / ' + fmt(ss.min) + ' / ' + fmt(ss.max) + '  (n=' + fmt(ss.count) + ')');
-          // populate override inputs
-          if (typeof j.override_hdd_c !== 'undefined') document.getElementById('hddovr').value = j.override_hdd_c;
-          if (typeof j.override_ssd_c !== 'undefined') document.getElementById('ssdovr').value = j.override_ssd_c;
-          // populate fan curve editors (new layout)
-          const ch_th = document.getElementById('curveH_th'); ch_th.innerHTML='';
-          const ch_pw = document.getElementById('curveH_pw'); ch_pw.innerHTML='';
-          const cs_th = document.getElementById('curveS_th'); cs_th.innerHTML='';
-          const cs_pw = document.getElementById('curveS_pw'); cs_pw.innerHTML='';
-          for (let i=0;i<10;i++) {
-            const th = document.createElement('input'); th.type='number'; th.min='0'; th.max='100'; th.step='1'; th.value = (HTH[i]!==undefined?HTH[i]:0);
-            const pw = document.createElement('input'); pw.type='number'; pw.min='0'; pw.max='100'; pw.step='1'; pw.value = (HPW[i]!==undefined?HPW[i]:0);
-            ch_th.appendChild(th);
-            ch_pw.appendChild(pw);
+          // populate override inputs only if not being edited (dirty)
+          if (!DIRTY_OVR) {
+            if (typeof j.override_hdd_c !== 'undefined') document.getElementById('hddovr').value = j.override_hdd_c;
+            if (typeof j.override_ssd_c !== 'undefined') document.getElementById('ssdovr').value = j.override_ssd_c;
           }
-          for (let i=0;i<10;i++) {
-            const th = document.createElement('input'); th.type='number'; th.min='0'; th.max='100'; th.step='1'; th.value = (STH[i]!==undefined?STH[i]:0);
-            const pw = document.createElement('input'); pw.type='number'; pw.min='0'; pw.max='100'; pw.step='1'; pw.value = (SPW[i]!==undefined?SPW[i]:0);
-            cs_th.appendChild(th);
-            cs_pw.appendChild(pw);
+          // populate fan curve editors (skip if user is editing to prevent overwrites)
+          if (!DIRTY_CURVES) {
+            const ch_th = document.getElementById('curveH_th'); ch_th.innerHTML='';
+            const ch_pw = document.getElementById('curveH_pw'); ch_pw.innerHTML='';
+            const cs_th = document.getElementById('curveS_th'); cs_th.innerHTML='';
+            const cs_pw = document.getElementById('curveS_pw'); cs_pw.innerHTML='';
+
+            const makeNum = (val)=>{ const i=document.createElement('input'); i.type='number'; i.min='0'; i.max='100'; i.step='1'; i.value = val; i.addEventListener('input', ()=> setDirty('curves', true)); return i; };
+
+            const stepsH = Math.max(HTH.length, HPW.length);
+            const stepsS = Math.max(STH.length, SPW.length);
+
+            for (let i=0;i<stepsH;i++) { ch_th.appendChild(makeNum(HTH[i]!==undefined?HTH[i]:0)); ch_pw.appendChild(makeNum(HPW[i]!==undefined?HPW[i]:0)); }
+            for (let i=0;i<stepsS;i++) { cs_th.appendChild(makeNum(STH[i]!==undefined?STH[i]:0)); cs_pw.appendChild(makeNum(SPW[i]!==undefined?SPW[i]:0)); }
           }
         } catch (e) {
           console.error(e);
@@ -617,6 +633,8 @@ def index():
       }
       refresh();
       setInterval(refresh, POLL_MS);
+      document.getElementById('hddovr').addEventListener('input', ()=> setDirty('ovr', true));
+      document.getElementById('ssdovr').addEventListener('input', ()=> setDirty('ovr', true));
       document.getElementById('savebtn').addEventListener('click', async () => {
         const h = parseInt(document.getElementById('hddovr').value, 10);
         const s = parseInt(document.getElementById('ssdovr').value, 10);
@@ -629,6 +647,7 @@ def index():
               single_override_ssd_c: isNaN(s) ? undefined : s
             })
           });
+          setDirty('ovr', false);
           refresh();
         } catch (err) { console.error(err); }
       });
@@ -647,9 +666,12 @@ def index():
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ hdd_thresholds: HTH2, hdd_pwm: HPW2, ssd_thresholds: STH2, ssd_pwm: SPW2 })
           });
+          setDirty('curves', false);
           refresh();
         } catch (err) { console.error(err); }
       });
+      document.getElementById('discardbtn').addEventListener('click', ()=> { setDirty('ovr', false); refresh(); });
+      document.getElementById('discardcurves').addEventListener('click', ()=> { setDirty('curves', false); refresh(); });
       </script>
     </body>
     </html>
