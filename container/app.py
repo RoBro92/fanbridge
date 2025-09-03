@@ -309,7 +309,7 @@ def compute_status():
         "recommended_pwm": int(recommended_pwm),
         "override": override,
         "mode": mode,
-        "version": os.environ.get("FANBRIDGE_VERSION", "0.0.2"),
+        "": os.environ.get("FANBRIDGE_VERSION", "0.1.0"),
         "disks_ini_mtime": disks_mtime,
     }
 
@@ -473,7 +473,10 @@ def index():
         /* Improve visibility of number input spin buttons in dark mode (WebKit/Blink) */
         body.dark input[type="number"]::-webkit-outer-spin-button,
         body.dark input[type="number"]::-webkit-inner-spin-button {
-          filter: invert(1) contrast(1.3);
+            opacity: 1 !important;
+            /* Make the arrows pop on dark backgrounds (Chromium/WebKit) */
+            filter: invert(1) brightness(1.8) contrast(2)
+                    drop-shadow(0 0 0.5px #000);
         }
         /* Firefox honours color-scheme; the above ensures good contrast on Chromium/WebKit */
         input[disabled], select[disabled] { opacity: .75; }
@@ -488,7 +491,6 @@ def index():
     <body>
       <h1>fanbridge</h1>
       <div class="meta flex">
-        <span id="mode" class="pill">mode: …</span>
         <span id="ver" class="pill">version: …</span>
         <span class="pill">refresh: every __PI__s</span>
         <span id="mtime" class="pill">disks.ini: …</span>
@@ -592,8 +594,6 @@ def index():
         try {
           const r = await fetch('/api/status', { cache: 'no-store' });
           const j = await r.json();
-          const modeEl = document.getElementById('mode');
-          if (modeEl) modeEl.textContent = 'mode: ' + (j.mode || '—');
           document.getElementById('ver').textContent = 'version: ' + (j.version || '—');
           document.getElementById('pwm').textContent = (j.recommended_pwm ?? '—') + '%';
           const now = new Date();
