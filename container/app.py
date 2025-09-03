@@ -284,17 +284,6 @@ def compute_status():
     else:
         pwm_hdd = map_temp_to_pwm(hdd["avg"], cfg["hdd_thresholds"], cfg["hdd_pwm"]) if hdd["count"] else 0
         pwm_ssd = map_temp_to_pwm(ssd["avg"], cfg["ssd_thresholds"], cfg["ssd_pwm"]) if ssd["count"] else 0
-        # Idle cutoffs: force 0% if averages are below configured thresholds
-        try:
-            if hdd["count"] and hdd["avg"] < int(cfg.get("idle_cutoff_hdd_c", 0)):
-                pwm_hdd = 0
-        except Exception:
-            pass
-        try:
-            if ssd["count"] and ssd["avg"] < int(cfg.get("idle_cutoff_ssd_c", 0)):
-                pwm_ssd = 0
-        except Exception:
-            pass
         recommended_pwm = max(pwm_hdd, pwm_ssd)
         if hdd["count"] == 0 and ssd["count"] == 0:
             recommended_pwm = int(cfg.get("fallback_pwm", 10))
@@ -317,8 +306,6 @@ def compute_status():
         "hdd_pwm": cfg.get("hdd_pwm", []),
         "ssd_thresholds": cfg.get("ssd_thresholds", []),
         "ssd_pwm": cfg.get("ssd_pwm", []),
-        "idle_cutoff_hdd_c": int(cfg.get("idle_cutoff_hdd_c", 0)),
-        "idle_cutoff_ssd_c": int(cfg.get("idle_cutoff_ssd_c", 0)),
         "recommended_pwm": int(recommended_pwm),
         "override": override,
         "mode": mode,
@@ -412,8 +399,6 @@ def api_curves():
     set_list_int("hdd_pwm")
     set_list_int("ssd_thresholds")
     set_list_int("ssd_pwm")
-    set_int_key("idle_cutoff_hdd_c")
-    set_int_key("idle_cutoff_ssd_c")
     save_config(c)
     return jsonify({"ok": True, "changed": changed})
 
@@ -427,7 +412,7 @@ def index():
     if pi < 3: pi = 3
     if pi > 60: pi = 60
 
-    html = f"""
+    html = """
     <!doctype html>
     <html lang="en">
     <head>
@@ -466,8 +451,9 @@ def index():
         th.inc, td.inc {{ text-align: center; width: 90px; }}
         td.inc {{ text-align:center; }}
         input.incl {{ transform: scale(1.3); accent-color: #16a34a; }}
-        .grid#curveH, .grid#curveS {{ grid-template-columns: repeat(10, minmax(80px, 1fr)); }}
-        .grid#curveH input, .grid#curveS input {{ width: 70px; }}
+        .grid#curveH_th, .grid#curveH_pw, .grid#curveS_th, .grid#curveS_pw {{ grid-template-columns: repeat(10, minmax(70px, 1fr)); }}
+        .grid#curveH_th input, .grid#curveH_pw input, .grid#curveS_th input, .grid#curveS_pw input {{ width: 64px; }}
+        .rowlabel {{ min-width: 110px; }}
       </style>
     </head>
     <body>
@@ -512,25 +498,38 @@ def index():
           <label>SSD override (°C): <input type="number" id="ssdovr" min="40" max="90" step="1"></label>
           <button id="savebtn">Save overrides</button>
         </div>
-        <div style="margin-top:12px;" class="inputs">
-          <label>HDD idle cutoff (°C): <input type="number" id="idleH" min="0" max="80" step="1"></label>
-          <label>SSD idle cutoff (°C): <input type="number" id="idleS" min="0" max="100" step="1"></label>
-        </div>
         <div class="panel" style="margin-top:12px;">
           <h2 style="margin-bottom:8px;">Fan curves (10 steps)</h2>
-          <div class="small muted" style="margin-bottom:6px;">Each row is Threshold °C → PWM % (left to right). Adjust both HDD and SSD separately.</div>
-          <div class="grid" id="curveH"></div>
-          <div class="grid" id="curveS" style="margin-top:10px;"></div>
+          <div class="small muted" style="margin-bottom:10px;">Set the mapping from average pool temperature to PWM. Use 10 steps for each pool. Left to right = increasing temperature.</div>
+
+          <h3 style="margin:6px 0 6px;">HDD fan curve</h3>
+          <div class="inputs" style="align-items:flex-start;">
+            <div class="rowlabel small muted" style="width:130px;">Thresholds (°C)</div>
+            <div class="grid" id="curveH_th"></div>
+          </div>
+          <div class="inputs" style="align-items:flex-start; margin-top:6px;">
+            <div class="rowlabel small muted" style="width:130px;">PWM (%)</div>
+            <div class="grid" id="curveH_pw"></div>
+          </div>
+
+          <h3 style="margin:12px 0 6px;">SSD fan curve</h3>
+          <div class="inputs" style="align-items:flex-start;">
+            <div class="rowlabel small muted" style="width:130px;">Thresholds (°C)</div>
+            <div class="grid" id="curveS_th"></div>
+          </div>
+          <div class="inputs" style="align-items:flex-start; margin-top:6px;">
+            <div class="rowlabel small muted" style="width:130px;">PWM (%)</div>
+            <div class="grid" id="curveS_pw"></div>
+          </div>
+
           <div class="inputs" style="margin-top:10px;"><button id="savecurves">Save fan curves</button></div>
         </div>
       </div>
 
-      <div class="footer small muted">
-        Health: <a href="/health">/health</a>
-      </div>
+      <!-- Footer health section removed -->
 
       <script>
-      const POLL_MS = {pi} * 1000;
+      const POLL_MS = __PI__ * 1000;
       const fmt = (v) => (v === null || v === undefined) ? "—" : v;
       // dynamic colour class based on per-type override thresholds
       let OVERRIDE_HDD = 45;
@@ -538,16 +537,16 @@ def index():
       const WARN_DELTA = 5; // orange when within 5°C of override
       let HTH = [], HPW = [], STH = [], SPW = [];
 
-      const clsForTemp = (t, type) => {{
+      const clsForTemp = (t, type) => {
         if (t === null || t === undefined) return "muted";
         const thr = (String(type).toUpperCase() === 'SSD') ? OVERRIDE_SSD : OVERRIDE_HDD;
         if (t >= thr) return "crit";            // red at/above override
         if (t >= (thr - WARN_DELTA)) return "warn"; // orange within 5°C
         return "ok";
-      }};
-      async function refresh() {{
-        try {{
-          const r = await fetch('/api/status', {{ cache: 'no-store' }});
+      };
+      async function refresh() {
+        try {
+          const r = await fetch('/api/status', { cache: 'no-store' });
           const j = await r.json();
           document.getElementById('mode').textContent = 'mode: ' + (j.mode || '—');
           document.getElementById('ver').textContent = 'version: ' + (j.version || '—');
@@ -563,11 +562,9 @@ def index():
           if (Array.isArray(j.hdd_pwm)) HPW = j.hdd_pwm.slice(0,10);
           if (Array.isArray(j.ssd_thresholds)) STH = j.ssd_thresholds.slice(0,10);
           if (Array.isArray(j.ssd_pwm)) SPW = j.ssd_pwm.slice(0,10);
-          if (typeof j.idle_cutoff_hdd_c === 'number') document.getElementById('idleH').value = j.idle_cutoff_hdd_c;
-          if (typeof j.idle_cutoff_ssd_c === 'number') document.getElementById('idleS').value = j.idle_cutoff_ssd_c;
           const rows = document.getElementById('rows');
           rows.innerHTML = '';
-          (j.drives || []).forEach(d => {{
+          (j.drives || []).forEach(d => {
             const tr = document.createElement('tr');
             const tdDev = document.createElement('td'); tdDev.textContent = d.dev ? (d.slot ? (d.dev + ' (' + d.slot + ')') : d.dev) : '—';
             const tdType = document.createElement('td'); tdType.textContent = d.type || '—'; tdType.className = 'type';
@@ -578,92 +575,86 @@ def index():
             cbInc.type = 'checkbox';
             cbInc.className = 'incl';
             cbInc.checked = !d.excluded; // checked means INCLUDED in calculations
-            cbInc.onchange = async (e) => {{
-              try {{
-                await fetch('/api/exclude', {{
+            cbInc.onchange = async (e) => {
+              try {
+                await fetch('/api/exclude', {
                   method: 'POST',
-                  headers: {{ 'Content-Type': 'application/json' }},
-                  body: JSON.stringify({{ dev: d.dev, excluded: !e.target.checked }})
-                }});
-              }} catch (err) {{ console.error(err); }}
-            }};
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ dev: d.dev, excluded: !e.target.checked })
+                });
+              } catch (err) { console.error(err); }
+            };
             tdInc.appendChild(cbInc);
             tr.append(tdDev, tdType, tdState, tdTemp, tdInc);
             rows.appendChild(tr);
-          }});
-          const hs = j.hdd || {{}}, ss = j.ssd || {{}};
+          });
+          const hs = j.hdd || {}, ss = j.ssd || {};
           document.getElementById('hddstats').textContent = (fmt(hs.avg) + ' / ' + fmt(hs.min) + ' / ' + fmt(hs.max) + '  (n=' + fmt(hs.count) + ')');
           document.getElementById('ssdstats').textContent = (fmt(ss.avg) + ' / ' + fmt(ss.min) + ' / ' + fmt(ss.max) + '  (n=' + fmt(ss.count) + ')');
           // populate override inputs
           if (typeof j.override_hdd_c !== 'undefined') document.getElementById('hddovr').value = j.override_hdd_c;
           if (typeof j.override_ssd_c !== 'undefined') document.getElementById('ssdovr').value = j.override_ssd_c;
-          // populate fan curve editors
-          const ch = document.getElementById('curveH'); ch.innerHTML = '';
-          const cs = document.getElementById('curveS'); cs.innerHTML = '';
-          for (let i=0;i<10;i++) {{
+          // populate fan curve editors (new layout)
+          const ch_th = document.getElementById('curveH_th'); ch_th.innerHTML='';
+          const ch_pw = document.getElementById('curveH_pw'); ch_pw.innerHTML='';
+          const cs_th = document.getElementById('curveS_th'); cs_th.innerHTML='';
+          const cs_pw = document.getElementById('curveS_pw'); cs_pw.innerHTML='';
+          for (let i=0;i<10;i++) {
             const th = document.createElement('input'); th.type='number'; th.min='0'; th.max='100'; th.step='1'; th.value = (HTH[i]!==undefined?HTH[i]:0);
             const pw = document.createElement('input'); pw.type='number'; pw.min='0'; pw.max='100'; pw.step='1'; pw.value = (HPW[i]!==undefined?HPW[i]:0);
-            const wrap1 = document.createElement('div'); wrap1.appendChild(th); wrap1.appendChild(pw); ch.appendChild(wrap1);
-          }}
-          for (let i=0;i<10;i++) {{
+            ch_th.appendChild(th);
+            ch_pw.appendChild(pw);
+          }
+          for (let i=0;i<10;i++) {
             const th = document.createElement('input'); th.type='number'; th.min='0'; th.max='100'; th.step='1'; th.value = (STH[i]!==undefined?STH[i]:0);
             const pw = document.createElement('input'); pw.type='number'; pw.min='0'; pw.max='100'; pw.step='1'; pw.value = (SPW[i]!==undefined?SPW[i]:0);
-            const wrap2 = document.createElement('div'); wrap2.appendChild(th); wrap2.appendChild(pw); cs.appendChild(wrap2);
-          }}
-        }} catch (e) {{
+            cs_th.appendChild(th);
+            cs_pw.appendChild(pw);
+          }
+        } catch (e) {
           console.error(e);
-        }}
-      }}
+        }
+      }
       refresh();
       setInterval(refresh, POLL_MS);
-      document.getElementById('savebtn').addEventListener('click', async () => {{
+      document.getElementById('savebtn').addEventListener('click', async () => {
         const h = parseInt(document.getElementById('hddovr').value, 10);
         const s = parseInt(document.getElementById('ssdovr').value, 10);
-        try {{
-          await fetch('/api/settings', {{
+        try {
+          await fetch('/api/settings', {
             method: 'POST',
-            headers: {{ 'Content-Type': 'application/json' }},
-            body: JSON.stringify({{
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
               single_override_hdd_c: isNaN(h) ? undefined : h,
               single_override_ssd_c: isNaN(s) ? undefined : s
-            }})
-          }});
+            })
+          });
           refresh();
-        }} catch (err) {{ console.error(err); }}
-      }});
-      document.getElementById('savecurves').addEventListener('click', async () => {{
-        const ch = document.getElementById('curveH').querySelectorAll('div');
-        const cs = document.getElementById('curveS').querySelectorAll('div');
-        const HTH2 = [], HPW2 = [], STH2 = [], SPW2 = [];
-        ch.forEach(div => {{
-          const ins = div.querySelectorAll('input');
-          HTH2.push(parseInt(ins[0].value||'0',10));
-          HPW2.push(parseInt(ins[1].value||'0',10));
-        }});
-        cs.forEach(div => {{
-          const ins = div.querySelectorAll('input');
-          STH2.push(parseInt(ins[0].value||'0',10));
-          SPW2.push(parseInt(ins[1].value||'0',10));
-        }});
-        const ih = parseInt(document.getElementById('idleH').value||'0',10);
-        const isv = parseInt(document.getElementById('idleS').value||'0',10);
-        try {{
-          await fetch('/api/curves', {{
+        } catch (err) { console.error(err); }
+      });
+      document.getElementById('savecurves').addEventListener('click', async () => {
+        const ch_th = document.getElementById('curveH_th').querySelectorAll('input');
+        const ch_pw = document.getElementById('curveH_pw').querySelectorAll('input');
+        const cs_th = document.getElementById('curveS_th').querySelectorAll('input');
+        const cs_pw = document.getElementById('curveS_pw').querySelectorAll('input');
+        const HTH2 = Array.from(ch_th).map(i => parseInt(i.value||'0',10));
+        const HPW2 = Array.from(ch_pw).map(i => parseInt(i.value||'0',10));
+        const STH2 = Array.from(cs_th).map(i => parseInt(i.value||'0',10));
+        const SPW2 = Array.from(cs_pw).map(i => parseInt(i.value||'0',10));
+        try {
+          await fetch('/api/curves', {
             method: 'POST',
-            headers: {{ 'Content-Type': 'application/json' }},
-            body: JSON.stringify({{
-              hdd_thresholds: HTH2, hdd_pwm: HPW2,
-              ssd_thresholds: STH2, ssd_pwm: SPW2,
-              idle_cutoff_hdd_c: ih, idle_cutoff_ssd_c: isv
-            }})
-          }});
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ hdd_thresholds: HTH2, hdd_pwm: HPW2, ssd_thresholds: STH2, ssd_pwm: SPW2 })
+          });
           refresh();
-        }} catch (err) {{ console.error(err); }}
-      }});
+        } catch (err) { console.error(err); }
+      });
       </script>
     </body>
     </html>
     """
+    html = html.replace("__PI__", str(pi))
     return html
 
 if __name__ == "__main__":
