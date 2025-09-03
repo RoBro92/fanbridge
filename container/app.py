@@ -4,6 +4,8 @@ import os, time, yaml, json, configparser, glob
 app = Flask(__name__)
 STARTED = time.time()
 
+APP_VERSION = os.environ.get("FANBRIDGE_VERSION", "dev")
+
 # Paths
 CONFIG_PATH = os.environ.get("FANBRIDGE_CONFIG", "/config/config.yml")
 DISKS_INI = "/unraid/disks.ini"   # bind-mount to /var/local/emhttp/disks.ini on host
