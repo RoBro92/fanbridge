@@ -457,10 +457,16 @@ def index():
       <script>
       const POLL_MS = {pi} * 1000;
       const fmt = (v) => (v === null || v === undefined) ? "—" : v;
-      const clsForTemp = (t) => {{
-        if (t === null) return "muted";
-        if (t >= 55) return "crit";
-        if (t >= 45) return "warn";
+      // dynamic colour class based on per-type override thresholds
+      let OVERRIDE_HDD = 45;
+      let OVERRIDE_SSD = 60;
+      const WARN_DELTA = 5; // orange when within 5°C of override
+
+      const clsForTemp = (t, type) => {{
+        if (t === null || t === undefined) return "muted";
+        const thr = (String(type).toUpperCase() === 'SSD') ? OVERRIDE_SSD : OVERRIDE_HDD;
+        if (t >= thr) return "crit";            // red at/above override
+        if (t >= (thr - WARN_DELTA)) return "warn"; // orange within 5°C
         return "ok";
       }};
       async function refresh() {{
@@ -474,6 +480,9 @@ def index():
           document.getElementById('updated').textContent = 'last update: ' + now.toLocaleString();
           const mt = j.disks_ini_mtime ? new Date(j.disks_ini_mtime * 1000).toLocaleTimeString() : 'n/a';
           document.getElementById('mtime').textContent = 'disks.ini: ' + mt;
+          // sync dynamic thresholds from server so colours reflect current settings
+          if (typeof j.override_hdd_c === 'number') OVERRIDE_HDD = j.override_hdd_c;
+          if (typeof j.override_ssd_c === 'number') OVERRIDE_SSD = j.override_ssd_c;
           const rows = document.getElementById('rows');
           rows.innerHTML = '';
           (j.drives || []).forEach(d => {{
@@ -482,7 +491,7 @@ def index():
             const tdType = document.createElement('td'); tdType.textContent = d.type || '—';
             const tdState = document.createElement('td'); tdState.textContent = d.state || '—';
             const tdTemp = document.createElement('td'); tdTemp.textContent = fmt(d.temp);
-            tdTemp.className = clsForTemp(d.temp);
+            tdTemp.className = clsForTemp(d.temp, d.type);
             const tdEx = document.createElement('td'); tdEx.textContent = d.excluded ? 'yes' : 'no'; tdEx.className='small muted';
             tr.append(tdDev, tdType, tdState, tdTemp, tdEx);
             rows.appendChild(tr);
