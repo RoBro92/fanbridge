@@ -3,9 +3,11 @@ version: "3.9"
 services:
   fanbridge:
     build:
-      # Build from the repo root so we can copy the root .env into the image
-      context: .
-      dockerfile: container/Dockerfile
+      # Build using the container folder as context so COPY paths resolve
+      context: ./container
+      dockerfile: Dockerfile
+      args:
+        - FANBRIDGE_VERSION=${FANBRIDGE_VERSION:-dev}
     image: ghcr.io/robro92/fanbridge:latest
 
     # Runtime env (optional)

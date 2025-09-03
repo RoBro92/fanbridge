@@ -8,18 +8,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # -------- Version handling ----------
-# We want the app to show a version out-of-the-box.
-# Build context is the repo root, so this copies the *root* .env into the image.
-# Your app.py already loads /app/.env via python-dotenv.
-COPY .env /app/.env
+# Inject version at build time via ARG (fallback to "dev").
+ARG FANBRIDGE_VERSION=dev
+ENV FANBRIDGE_VERSION=${FANBRIDGE_VERSION}
 # ------------------------------------
 
 # Python deps (copied first for better layer caching)
-COPY container/requirements.txt .
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # App code
-COPY container/ /app/
+COPY . /app/
 
 # Runtime env
 ENV PYTHONUNBUFFERED=1
