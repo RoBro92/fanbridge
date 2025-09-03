@@ -462,10 +462,20 @@ def index():
         .rowlabel { min-width: 110px; }
         /* Form controls follow theme */
         input, select {
-          background: var(--bg);
+          background: var(--cardbg);
           color: var(--fg);
           border: 1px solid var(--border);
+          color-scheme: light;
         }
+        body.dark input, body.dark select {
+          color-scheme: dark;
+        }
+        /* Improve visibility of number input spin buttons in dark mode (WebKit/Blink) */
+        body.dark input[type="number"]::-webkit-outer-spin-button,
+        body.dark input[type="number"]::-webkit-inner-spin-button {
+          filter: invert(1) contrast(1.3);
+        }
+        /* Firefox honours color-scheme; the above ensures good contrast on Chromium/WebKit */
         input[disabled], select[disabled] { opacity: .75; }
 
         /* Ensure temp cells don't inherit odd backgrounds in dark mode */
@@ -478,7 +488,6 @@ def index():
     <body>
       <h1>fanbridge</h1>
       <div class="meta flex">
-        <span id="mode" class="pill">mode: …</span>
         <span id="ver" class="pill">version: …</span>
         <span class="pill">refresh: every __PI__s</span>
         <span id="mtime" class="pill">disks.ini: …</span>
@@ -521,34 +530,32 @@ def index():
           <button id="savebtn">Save overrides</button>
           <button id="discardbtn" style="display:none;">Discard</button>
         </div>
-        <div class="panel" style="margin-top:12px;">
         <h3 style="margin-bottom:8px;">Fan curves</h3>
         <div class="small muted" style="margin-bottom:10px;">Set the mapping from average pool temperature to PWM. Left to right = increasing temperature.</div>
 
-          <h2 style="margin:6px 0 6px;">HDD fan curve</h2>
-          <div class="inputs" style="align-items:flex-start;">
-            <div class="rowlabel small muted" style="width:130px;">Thresholds (°C)</div>
-            <div class="grid" id="curveH_th"></div>
-          </div>
-          <div class="inputs" style="align-items:flex-start; margin-top:6px;">
-            <div class="rowlabel small muted" style="width:130px;">PWM (%)</div>
-            <div class="grid" id="curveH_pw"></div>
-          </div>
+        <h2 style="margin:6px 0 6px;">HDD fan curve</h2>
+        <div class="inputs" style="align-items:flex-start;">
+          <div class="rowlabel small muted" style="width:130px;">Thresholds (°C)</div>
+          <div class="grid" id="curveH_th"></div>
+        </div>
+        <div class="inputs" style="align-items:flex-start; margin-top:6px;">
+          <div class="rowlabel small muted" style="width:130px;">PWM (%)</div>
+          <div class="grid" id="curveH_pw"></div>
+        </div>
 
-          <h2 style="margin:12px 0 6px;">SSD fan curve</h2>
-          <div class="inputs" style="align-items:flex-start;">
-            <div class="rowlabel small muted" style="width:130px;">Thresholds (°C)</div>
-            <div class="grid" id="curveS_th"></div>
-          </div>
-          <div class="inputs" style="align-items:flex-start; margin-top:6px;">
-            <div class="rowlabel small muted" style="width:130px;">PWM (%)</div>
-            <div class="grid" id="curveS_pw"></div>
-          </div>
+        <h2 style="margin:12px 0 6px;">SSD fan curve</h2>
+        <div class="inputs" style="align-items:flex-start;">
+          <div class="rowlabel small muted" style="width:130px;">Thresholds (°C)</div>
+          <div class="grid" id="curveS_th"></div>
+        </div>
+        <div class="inputs" style="align-items:flex-start; margin-top:6px;">
+          <div class="rowlabel small muted" style="width:130px;">PWM (%)</div>
+          <div class="grid" id="curveS_pw"></div>
+        </div>
 
-          <div class="inputs" style="margin-top:10px;">
-            <button id="savecurves">Save fan curves</button>
-            <button id="discardcurves" style="display:none;">Discard</button>
-          </div>
+        <div class="inputs" style="margin-top:10px;">
+          <button id="savecurves">Save fan curves</button>
+          <button id="discardcurves" style="display:none;">Discard</button>
         </div>
       </div>
 
