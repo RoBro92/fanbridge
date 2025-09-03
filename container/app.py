@@ -85,8 +85,18 @@ def _read_file(path: str) -> str | None:
     except Exception:
         return None
 
+# Helper to normalise/strip quotes from INI values
+def _unquote(s: str | None) -> str:
+    if s is None:
+        return ""
+    s = s.strip()
+    if len(s) >= 2 and ((s[0] == '"' and s[-1] == '"') or (s[0] == "'" and s[-1] == "'")):
+        s = s[1:-1]
+    return s.strip()
+
 def _sysfs(dev: str, rel: str) -> str | None:
-    return _read_file(f"/sys/block/{dev}/{rel}")
+    d = _unquote(dev)
+    return _read_file(f"/sys/block/{d}/{rel}")
 
 def _spin_state_from_sysfs(dev: str) -> bool | None:
     """
@@ -134,9 +144,10 @@ def _nvme_temp_sysfs(dev: str) -> int | None:
 
 def _is_hdd(dev_name: str) -> bool:
     # NVMe → SSD, else use rotational when available, default HDD
-    if dev_name.startswith("nvme"):
+    d = _unquote(dev_name)
+    if d.startswith("nvme"):
         return False
-    rot = _read_file(f"/sys/block/{dev_name}/queue/rotational")
+    rot = _read_file(f"/sys/block/{d}/queue/rotational")
     if rot is not None:
         return rot.strip() == "1"
     return True
@@ -161,20 +172,20 @@ def _read_disks_ini() -> list[dict]:
 
     for section in cp.sections():
         # Accept any section that provides a device field (diskX, parity, cache, etc.)
-        dev = cp.get(section, "device", fallback="").strip()
+        dev = _unquote(cp.get(section, "device", fallback=""))
         if not dev:
             continue
 
         # temperature: blank or "NA" → None; clamp to 0–120C
-        temp_val = cp.get(section, "temp", fallback="").strip()
+        temp_raw = _unquote(cp.get(section, "temp", fallback=""))
         temp: int | None = None
-        if temp_val.isdigit():
-            t = int(temp_val)
+        if temp_raw.isdigit():
+            t = int(temp_raw)
             if 0 <= t <= 120:
                 temp = t
 
         # spundown = "1" means disk is sleeping
-        spundown = cp.get(section, "spundown", fallback="0").strip() == "1"
+        spundown = _unquote(cp.get(section, "spundown", fallback="0")) == "1"
 
         # If sysfs clearly indicates activity, prefer it over disks.ini lag
         ss = _spin_state_from_sysfs(dev)
@@ -182,19 +193,20 @@ def _read_disks_ini() -> list[dict]:
             spundown = False
 
         # If temp is unknown for NVMe but device is active, try sysfs
-        if temp is None and dev.startswith("nvme") and not spundown:
-            t_nv = _nvme_temp_sysfs(dev)
+        dclean = _unquote(dev)
+        if temp is None and dclean.startswith("nvme") and not spundown:
+            t_nv = _nvme_temp_sysfs(dclean)
             if isinstance(t_nv, int):
                 temp = t_nv
 
-        dtype = "SSD" if not _is_hdd(dev) else "HDD"
+        dtype = "SSD" if not _is_hdd(dclean) else "HDD"
         state = "spun down" if spundown else ("on" if temp is not None else "N/A")
         drives.append({
-            "dev": dev,
+            "dev": dclean,
             "type": dtype,
             "temp": temp,
             "state": state,
-            "excluded": (dev in excludes),
+            "excluded": (dclean in excludes),
         })
     return drives
 
