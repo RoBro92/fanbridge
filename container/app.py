@@ -160,8 +160,7 @@ def _read_disks_ini() -> list[dict]:
     excludes = set(cfg.get("exclude_devices") or [])
 
     for section in cp.sections():
-        if not section.startswith("disk"):
-            continue
+        # Accept any section that provides a device field (diskX, parity, cache, etc.)
         dev = cp.get(section, "device", fallback="").strip()
         if not dev:
             continue
