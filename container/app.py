@@ -488,6 +488,7 @@ def index():
     <body>
       <h1>fanbridge</h1>
       <div class="meta flex">
+        <span id="mode" class="pill">mode: …</span>
         <span id="ver" class="pill">version: …</span>
         <span class="pill">refresh: every __PI__s</span>
         <span id="mtime" class="pill">disks.ini: …</span>
@@ -591,7 +592,8 @@ def index():
         try {
           const r = await fetch('/api/status', { cache: 'no-store' });
           const j = await r.json();
-          document.getElementById('mode').textContent = 'mode: ' + (j.mode || '—');
+          const modeEl = document.getElementById('mode');
+          if (modeEl) modeEl.textContent = 'mode: ' + (j.mode || '—');
           document.getElementById('ver').textContent = 'version: ' + (j.version || '—');
           document.getElementById('pwm').textContent = (j.recommended_pwm ?? '—') + '%';
           const now = new Date();
