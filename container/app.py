@@ -1,4 +1,4 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 import os, time, yaml, json, configparser, glob
 
 app = Flask(__name__)
@@ -200,7 +200,10 @@ def _read_disks_ini() -> list[dict]:
                 temp = t_nv
 
         dtype = "SSD" if not _is_hdd(dclean) else "HDD"
-        state = "spun down" if spundown else ("on" if temp is not None else "N/A")
+        if dtype == "HDD":
+            state = "down" if spundown else "up"
+        else:
+            state = "spun down" if spundown else ("on" if temp is not None else "N/A")
         drives.append({
             "dev": dclean,
             "type": dtype,
@@ -233,11 +236,17 @@ def compute_status():
         mode = "sim"
         drives = []
         for d in (cfg.get("sim", {}).get("drives", []) or []):
+            _dtype = d.get("type", "HDD")
+            _temp = d.get("temp")
+            if _dtype == "HDD":
+                _state = "down" if _temp is None else "up"
+            else:
+                _state = "spun down" if _temp is None else "on"
             drives.append({
                 "dev": d.get("name"),
-                "type": d.get("type", "HDD"),
-                "temp": d.get("temp"),
-                "state": "on" if d.get("temp") is not None else "spun down",
+                "type": _dtype,
+                "temp": _temp,
+                "state": _state,
                 "excluded": False,
             })
 
@@ -283,6 +292,9 @@ def compute_status():
         "drives": drives,
         "hdd": hdd,
         "ssd": ssd,
+        "override_hdd_c": int(cfg.get("single_override_hdd_c", 45)),
+        "override_ssd_c": int(cfg.get("single_override_ssd_c", 60)),
+        "exclude_devices": sorted(list(set(cfg.get("exclude_devices") or []))),
         "recommended_pwm": int(recommended_pwm),
         "override": override,
         "mode": mode,
@@ -304,6 +316,47 @@ def add_no_cache(resp):
 @app.get("/api/status")
 def status():
     return jsonify(compute_status())
+
+
+# --------- API: Exclude device ---------
+@app.post("/api/exclude")
+def api_exclude():
+    data = request.get_json(force=True, silent=True) or {}
+    dev = (data.get("dev") or "").strip()
+    if not dev:
+        return jsonify({"ok": False, "error": "missing dev"}), 400
+    excluded = bool(data.get("excluded"))
+    c = load_config()
+    current = set(c.get("exclude_devices") or [])
+    if excluded:
+        current.add(dev)
+    else:
+        current.discard(dev)
+    c["exclude_devices"] = sorted(current)
+    save_config(c)
+    return jsonify({"ok": True, "exclude_devices": c["exclude_devices"]})
+
+
+# --------- API: Settings overrides ---------
+@app.post("/api/settings")
+def api_settings():
+    data = request.get_json(force=True, silent=True) or {}
+    c = load_config()
+    changed = {}
+    def set_int(key, default):
+        v = data.get(key, None)
+        if v is None:
+            return
+        try:
+            iv = int(str(v).strip())
+            c[key] = iv
+            changed[key] = iv
+        except Exception:
+            pass
+    set_int("single_override_hdd_c", c.get("single_override_hdd_c", 45))
+    set_int("single_override_ssd_c", c.get("single_override_ssd_c", 60))
+    save_config(c)
+    return jsonify({"ok": True, "changed": changed})
 
 @app.get("/")
 def index():
@@ -339,6 +392,14 @@ def index():
         .right {{ float:right; }}
         .footer {{ margin-top: 16px; }}
         code {{ background:#f6f8fa; padding:2px 6px; border-radius:4px; }}
+        .panel {{ border:1px solid #ddd; border-radius:8px; padding:12px; background:#fff; max-width: 880px; margin-top:16px; }}
+        .panel h2 {{ margin:0 0 8px; font-size:16px; }}
+        .chk {{ display:inline-flex; align-items:center; gap:6px; margin:6px 12px 6px 0; }}
+        .grid {{ display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:6px 12px; }}
+        .inputs {{ display:flex; gap:12px; align-items:center; flex-wrap:wrap; }}
+        input[type="number"] {{ width: 72px; padding:4px 6px; }}
+        button {{ padding:6px 10px; border:1px solid #ccc; background:#f6f8fa; border-radius:6px; cursor:pointer; }}
+        button:hover {{ background:#eef2f6; }}
       </style>
     </head>
     <body>
@@ -375,6 +436,19 @@ def index():
           </tr>
         </tfoot>
       </table>
+
+      <div class="panel">
+        <h2>Configuration</h2>
+        <div class="inputs">
+          <label>HDD override (°C): <input type="number" id="hddovr" min="30" max="70" step="1"></label>
+          <label>SSD override (°C): <input type="number" id="ssdovr" min="40" max="90" step="1"></label>
+          <button id="savebtn">Save overrides</button>
+        </div>
+        <div style="margin-top:10px;">
+          <strong>Exclude devices</strong>
+          <div id="drivelist" class="grid"></div>
+        </div>
+      </div>
 
       <div class="footer small muted">
         Health: <a href="/health">/health</a>
@@ -416,12 +490,52 @@ def index():
           const hs = j.hdd || {{}}, ss = j.ssd || {{}};
           document.getElementById('hddstats').textContent = `${{fmt(hs.avg)}} / ${{fmt(hs.min)}} / ${{fmt(hs.max)}}  (n=${{fmt(hs.count)}})`;
           document.getElementById('ssdstats').textContent = `${{fmt(ss.avg)}} / ${{fmt(ss.min)}} / ${{fmt(ss.max)}}  (n=${{fmt(ss.count)}})`;
+          // populate override inputs
+          if (typeof j.override_hdd_c !== 'undefined') document.getElementById('hddovr').value = j.override_hdd_c;
+          if (typeof j.override_ssd_c !== 'undefined') document.getElementById('ssdovr').value = j.override_ssd_c;
+          // populate exclude list
+          const dl = document.getElementById('drivelist');
+          dl.innerHTML = '';
+          (j.drives || []).forEach(d => {{
+            const wrap = document.createElement('label');
+            wrap.className = 'chk';
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.checked = !!d.excluded;
+            cb.onchange = async (e) => {{
+              try {{
+                await fetch('/api/exclude', {{
+                  method: 'POST',
+                  headers: {{ 'Content-Type': 'application/json' }},
+                  body: JSON.stringify({{ dev: d.dev, excluded: e.target.checked }})
+                }});
+              }} catch (err) {{ console.error(err); }}
+            }};
+            const txt = document.createElement('span'); txt.textContent = d.dev;
+            wrap.appendChild(cb); wrap.appendChild(txt);
+            dl.appendChild(wrap);
+          }});
         }} catch (e) {{
           console.error(e);
         }}
       }}
       refresh();
       setInterval(refresh, POLL_MS);
+      document.getElementById('savebtn').addEventListener('click', async () => {{
+        const h = parseInt(document.getElementById('hddovr').value, 10);
+        const s = parseInt(document.getElementById('ssdovr').value, 10);
+        try {{
+          await fetch('/api/settings', {{
+            method: 'POST',
+            headers: {{ 'Content-Type': 'application/json' }},
+            body: JSON.stringify({{
+              single_override_hdd_c: isNaN(h) ? undefined : h,
+              single_override_ssd_c: isNaN(s) ? undefined : s
+            }})
+          }});
+          refresh();
+        }} catch (err) {{ console.error(err); }}
+      }});
       </script>
     </body>
     </html>
