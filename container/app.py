@@ -420,40 +420,40 @@ def index():
       <meta name="viewport" content="width=device-width,initial-scale=1">
       <title>fanbridge</title>
       <style>
-        body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }}
-        h1 {{ margin: 0 0 8px; }}
-        .meta {{ color: #666; margin-bottom: 16px; }}
-        table {{ border-collapse: collapse; width: 100%; max-width: 880px; }}
-        th, td {{ border: 1px solid #ddd; padding: 8px 10px; text-align: left; }}
-        th {{ background: #f6f8fa; }}
-        .ok {{ color: #0a7; font-weight: 600; }}
-        .warn {{ color: #d97706; font-weight: 600; }}
-        .crit {{ color: #d32; font-weight: 700; }}
-        .muted {{ color: #777; }}
-        .flex {{ display:flex; gap:12px; align-items:center; flex-wrap: wrap; }}
-        .pill {{ border:1px solid #ddd; border-radius:999px; padding:3px 10px; background:#fafafa; font-size: 12px; }}
-        .small {{ font-size: 12px; }}
-        .right {{ float:right; }}
-        .footer {{ margin-top: 16px; }}
-        code {{ background:#f6f8fa; padding:2px 6px; border-radius:4px; }}
-        .panel {{ border:1px solid #ddd; border-radius:8px; padding:12px; background:#fff; max-width: 880px; margin-top:16px; }}
-        .panel h2 {{ margin:0 0 8px; font-size:16px; }}
-        .chk {{ display:inline-flex; align-items:center; gap:6px; margin:6px 12px 6px 0; }}
-        .grid {{ display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:6px 12px; }}
-        .inputs {{ display:flex; gap:12px; align-items:center; flex-wrap:wrap; }}
-        input[type="number"] {{ width: 72px; padding:4px 6px; }}
-        button {{ padding:6px 10px; border:1px solid #ccc; background:#f6f8fa; border-radius:6px; cursor:pointer; }}
-        button:hover {{ background:#eef2f6; }}
+        body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }
+        h1 { margin: 0 0 8px; }
+        .meta { color: #666; margin-bottom: 16px; }
+        table { border-collapse: collapse; width: 100%; max-width: 880px; }
+        th, td { border: 1px solid #ddd; padding: 8px 10px; text-align: left; }
+        th { background: #f6f8fa; }
+        .ok { color: #0a7; font-weight: 600; }
+        .warn { color: #d97706; font-weight: 600; }
+        .crit { color: #d32; font-weight: 700; }
+        .muted { color: #777; }
+        .flex { display:flex; gap:12px; align-items:center; flex-wrap: wrap; }
+        .pill { border:1px solid #ddd; border-radius:999px; padding:3px 10px; background:#fafafa; font-size: 12px; }
+        .small { font-size: 12px; }
+        .right { float:right; }
+        .footer { margin-top: 16px; }
+        code { background:#f6f8fa; padding:2px 6px; border-radius:4px; }
+        .panel { border:1px solid #ddd; border-radius:8px; padding:12px; background:#fff; max-width: 880px; margin-top:16px; }
+        .panel h2 { margin:0 0 8px; font-size:16px; }
+        .chk { display:inline-flex; align-items:center; gap:6px; margin:6px 12px 6px 0; }
+        .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:6px 12px; }
+        .inputs { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+        input[type="number"] { width: 72px; padding:4px 6px; }
+        button { padding:6px 10px; border:1px solid #ccc; background:#f6f8fa; border-radius:6px; cursor:pointer; }
+        button:hover { background:#eef2f6; }
         /* Centre + tighten specific columns */
-        th.type, td.type {{ text-align: center; width: 90px; }}
-        th.state, td.state {{ text-align: center; width: 90px; }}
-        th.temp, td.temp {{ text-align: center; width: 110px; }}
-        th.inc, td.inc {{ text-align: center; width: 90px; }}
-        td.inc {{ text-align:center; }}
-        input.incl {{ transform: scale(1.3); accent-color: #16a34a; }}
-        .grid#curveH_th, .grid#curveH_pw, .grid#curveS_th, .grid#curveS_pw {{ grid-template-columns: repeat(10, minmax(70px, 1fr)); }}
-        .grid#curveH_th input, .grid#curveH_pw input, .grid#curveS_th input, .grid#curveS_pw input {{ width: 64px; }}
-        .rowlabel {{ min-width: 110px; }}
+        th.type, td.type { text-align: center; width: 90px; }
+        th.state, td.state { text-align: center; width: 90px; }
+        th.temp, td.temp { text-align: center; width: 110px; }
+        th.inc, td.inc { text-align: center; width: 90px; }
+        td.inc { text-align:center; }
+        input.incl { transform: scale(1.3); accent-color: #16a34a; }
+        .grid#curveH_th, .grid#curveH_pw, .grid#curveS_th, .grid#curveS_pw { grid-template-columns: repeat(10, minmax(70px, 1fr)); }
+        .grid#curveH_th input, .grid#curveH_pw input, .grid#curveS_th input, .grid#curveS_pw input { width: 64px; }
+        .rowlabel { min-width: 110px; }
       </style>
     </head>
     <body>
@@ -461,7 +461,7 @@ def index():
       <div class="meta flex">
         <span id="mode" class="pill">mode: …</span>
         <span id="ver" class="pill">version: …</span>
-        <span class="pill">refresh: every {pi}s</span>
+        <span class="pill">refresh: every __PI__s</span>
         <span id="mtime" class="pill">disks.ini: …</span>
         <span class="small muted" id="updated">last update: …</span>
         <a href="/api/status" class="right small" style="margin-left:12px;">API</a><a href="/health" class="right small" style="margin-left:12px;">Health</a>
