@@ -379,9 +379,9 @@ def api_curves():
         v = data.get(key)
         if isinstance(v, list):
             try:
-                arr = [int(x) for x in v][:10]
-                if len(arr) < 10:
-                    arr += arr[-1:] * (10 - len(arr)) if arr else [0]*10
+                arr = [int(x) for x in v][:32]
+                if not arr:
+                    return
                 c[key] = arr
                 changed[key] = arr
             except Exception:
@@ -421,17 +421,24 @@ def index():
       <title>fanbridge</title>
       <style>
         body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }
+        :root { --bg:#ffffff; --fg:#111827; --muted:#6b7280; --border:#e5e7eb; --thbg:#f6f8fa; --pillbg:#fafafa; }
+        body.dark { --bg:#0f172a; --fg:#e5e7eb; --muted:#94a3b8; --border:#334155; --thbg:#111827; --pillbg:#1f2937; }
+        body { background: var(--bg); color: var(--fg); }
+        .muted { color: var(--muted); }
+        table, th, td { border-color: var(--border); }
+        th { background: var(--thbg); }
+        .pill { border:1px solid var(--border); border-radius:999px; padding:3px 10px; background:var(--pillbg); font-size: 12px; color: var(--fg); }
+        button { padding:6px 10px; border:1px solid var(--border); background:var(--pillbg); border-radius:6px; cursor:pointer; color: var(--fg); }
+        button:hover { filter: brightness(1.05); }
+        a { color: inherit; text-decoration: underline; }
         h1 { margin: 0 0 8px; }
         .meta { color: #666; margin-bottom: 16px; }
         table { border-collapse: collapse; width: 100%; max-width: 880px; }
-        th, td { border: 1px solid #ddd; padding: 8px 10px; text-align: left; }
-        th { background: #f6f8fa; }
+        th, td { border: 1px solid; padding: 8px 10px; text-align: left; }
         .ok { color: #0a7; font-weight: 600; }
         .warn { color: #d97706; font-weight: 600; }
         .crit { color: #d32; font-weight: 700; }
-        .muted { color: #777; }
         .flex { display:flex; gap:12px; align-items:center; flex-wrap: wrap; }
-        .pill { border:1px solid #ddd; border-radius:999px; padding:3px 10px; background:#fafafa; font-size: 12px; }
         .pill.warn { border-color:#f59e0b; background:#fff7ed; color:#92400e; }
         .small { font-size: 12px; }
         .right { float:right; }
@@ -443,8 +450,6 @@ def index():
         .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:6px 12px; }
         .inputs { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
         input[type="number"] { width: 72px; padding:4px 6px; }
-        button { padding:6px 10px; border:1px solid #ccc; background:#f6f8fa; border-radius:6px; cursor:pointer; }
-        button:hover { background:#eef2f6; }
         /* Centre + tighten specific columns */
         th.type, td.type { text-align: center; width: 90px; }
         th.state, td.state { text-align: center; width: 90px; }
@@ -452,7 +457,7 @@ def index():
         th.inc, td.inc { text-align: center; width: 90px; }
         td.inc { text-align:center; }
         input.incl { transform: scale(1.3); accent-color: #16a34a; }
-        .grid#curveH_th, .grid#curveH_pw, .grid#curveS_th, .grid#curveS_pw { grid-template-columns: repeat(10, minmax(70px, 1fr)); }
+        .grid#curveH_th, .grid#curveH_pw, .grid#curveS_th, .grid#curveS_pw { grid-template-columns: repeat(auto-fit, minmax(70px, 1fr)); }
         .grid#curveH_th input, .grid#curveH_pw input, .grid#curveS_th input, .grid#curveS_pw input { width: 64px; }
         .rowlabel { min-width: 110px; }
       </style>
@@ -466,6 +471,7 @@ def index():
         <span id="mtime" class="pill">disks.ini: …</span>
         <span class="small muted" id="updated">last update: …</span>
         <a href="/api/status" class="right small" style="margin-left:12px;">API</a><a href="/health" class="right small" style="margin-left:12px;">Health</a>
+        <button id="themeToggle" class="pill" type="button">Theme: …</button>
         <span id="dirtyFlag" class="pill warn" style="display:none;">Unsaved changes</span>
       </div>
 
@@ -503,8 +509,8 @@ def index():
           <button id="discardbtn" style="display:none;">Discard</button>
         </div>
         <div class="panel" style="margin-top:12px;">
-          <h3 style="margin-bottom:8px;">Fan curves (10 steps)</h3>
-          <div class="small muted" style="margin-bottom:10px;">Set the mapping from average pool temperature to PWM. Use 10 steps for each pool. Left to right = increasing temperature.</div>
+        <h3 style="margin-bottom:8px;">Fan curves</h3>
+        <div class="small muted" style="margin-bottom:10px;">Set the mapping from average pool temperature to PWM. Left to right = increasing temperature.</div>
 
           <h2 style="margin:6px 0 6px;">HDD fan curve</h2>
           <div class="inputs" style="align-items:flex-start;">
@@ -575,10 +581,10 @@ def index():
           // sync dynamic thresholds from server so colours reflect current settings
           if (typeof j.override_hdd_c === 'number') OVERRIDE_HDD = j.override_hdd_c;
           if (typeof j.override_ssd_c === 'number') OVERRIDE_SSD = j.override_ssd_c;
-          if (Array.isArray(j.hdd_thresholds)) HTH = j.hdd_thresholds.slice(0,10);
-          if (Array.isArray(j.hdd_pwm)) HPW = j.hdd_pwm.slice(0,10);
-          if (Array.isArray(j.ssd_thresholds)) STH = j.ssd_thresholds.slice(0,10);
-          if (Array.isArray(j.ssd_pwm)) SPW = j.ssd_pwm.slice(0,10);
+          if (Array.isArray(j.hdd_thresholds)) HTH = j.hdd_thresholds.slice();
+          if (Array.isArray(j.hdd_pwm)) HPW = j.hdd_pwm.slice();
+          if (Array.isArray(j.ssd_thresholds)) STH = j.ssd_thresholds.slice();
+          if (Array.isArray(j.ssd_pwm)) SPW = j.ssd_pwm.slice();
           const rows = document.getElementById('rows');
           rows.innerHTML = '';
           (j.drives || []).forEach(d => {
@@ -622,8 +628,15 @@ def index():
 
             const makeNum = (val)=>{ const i=document.createElement('input'); i.type='number'; i.min='0'; i.max='100'; i.step='1'; i.value = val; i.addEventListener('input', ()=> setDirty('curves', true)); return i; };
 
-            const stepsH = Math.max(HTH.length, HPW.length);
-            const stepsS = Math.max(STH.length, SPW.length);
+            const nH = Math.max(HTH.length, HPW.length) || 1;
+            const nS = Math.max(STH.length, SPW.length) || 1;
+            ch_th.style.gridTemplateColumns = `repeat(${nH}, minmax(70px, 1fr))`;
+            ch_pw.style.gridTemplateColumns = `repeat(${nH}, minmax(70px, 1fr))`;
+            cs_th.style.gridTemplateColumns = `repeat(${nS}, minmax(70px, 1fr))`;
+            cs_pw.style.gridTemplateColumns = `repeat(${nS}, minmax(70px, 1fr))`;
+
+            const stepsH = nH;
+            const stepsS = nS;
 
             for (let i=0;i<stepsH;i++) { ch_th.appendChild(makeNum(HTH[i]!==undefined?HTH[i]:0)); ch_pw.appendChild(makeNum(HPW[i]!==undefined?HPW[i]:0)); }
             for (let i=0;i<stepsS;i++) { cs_th.appendChild(makeNum(STH[i]!==undefined?STH[i]:0)); cs_pw.appendChild(makeNum(SPW[i]!==undefined?SPW[i]:0)); }
@@ -673,6 +686,27 @@ def index():
       });
       document.getElementById('discardbtn').addEventListener('click', ()=> { setDirty('ovr', false); refresh(); });
       document.getElementById('discardcurves').addEventListener('click', ()=> { setDirty('curves', false); refresh(); });
+      // ---- Theme toggle (light/dark) ----
+      const THEME_KEY = 'fanbridgeTheme';
+      function applyTheme(t){
+        const dark = (t === 'dark');
+        document.body.classList.toggle('dark', dark);
+        const btn = document.getElementById('themeToggle');
+        if (btn) btn.textContent = 'Theme: ' + (dark ? 'Dark' : 'Light');
+        try { localStorage.setItem(THEME_KEY, dark ? 'dark' : 'light'); } catch(e) {}
+      }
+      (function(){
+        let pref = 'light';
+        try {
+          pref = localStorage.getItem(THEME_KEY) || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        } catch(e) {}
+        applyTheme(pref);
+        const tbtn = document.getElementById('themeToggle');
+        if (tbtn) tbtn.addEventListener('click', ()=> {
+          const next = document.body.classList.contains('dark') ? 'light' : 'dark';
+          applyTheme(next);
+        });
+      })();
       </script>
     </body>
     </html>
