@@ -14,6 +14,14 @@ FanBridge is a Dockerised Unraid service designed to monitor hard drive temperat
   - `/` – homepage with status
   - `/health` – healthcheck endpoint
   - `/api/status` – JSON output with drive temperatures and recommended PWM values
+- Authentication with login, password change, and logout functionality.
+- CSRF protection and session handling for secure interactions.
+- Validation for fan curve inputs to ensure correct configurations.
+- Reset to defaults for config and fan curves.
+- Status and error surfacing via toasts and banners.
+- Mobile-friendly responsive UI for use on various devices.
+- Theme menu with dark/light toggle for user preference.
+- USB serial communication with Arduino/RP2040 including test integration.
 
 ## Usage
 
@@ -27,10 +35,21 @@ Install fanbridge directly through the Unraid Community Applications plugin for 
 
 ## Roadmap / Planned Features
 
-- Full integration with Arduino or RP2040 microcontrollers to enable real-time fan speed control based on drive temperatures.
-- Secure authentication and user management for enhanced access control.
+- ~~Full integration with Arduino or RP2040 microcontrollers to enable real-time fan speed control based on drive temperatures.~~ (partial test mode implemented)
+- ~~Secure authentication and user management for enhanced access control.~~
 - Richer dashboards with historical temperature and fan speed data visualization.
-- Packaging as a one-click Unraid app for simplified installation and updates.
+- ~~Packaging as a one-click Unraid app for simplified installation and updates.~~
+
+## Upcoming Ideas
+
+- Live updates via WebSocket/SSE for smoother refresh.
+- Per-drive details drawer with extended info.
+- Sparkline mini-graphs for temps.
+- Fan curve profiles (Quiet/Balanced/Performance).
+- Temporary override slider for manual fan control.
+- Sorting & filtering in the drive table.
+- Import/export of configs for sharing.
+- Enhanced security headers and rate limiting.
 
 ## Changelog
 
