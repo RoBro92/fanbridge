@@ -137,6 +137,10 @@ def _read_version_from_release() -> str | None:
 # Canonical version source: RELEASE.md only.
 # If not found, leave empty so UI shows "—".
 APP_VERSION = _read_version_from_release() or None
+# When running this file directly (local dev), show version "local" early,
+# so startup logs and UI are consistent without extra setup.
+if __name__ == "__main__" and not os.environ.get("GUNICORN_WORKER"):  # heuristic: not under gunicorn
+    APP_VERSION = "local"
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = _load_or_create_secret()
@@ -156,7 +160,18 @@ if os.environ.get("TEMPLATES_AUTO_RELOAD") == "1" or os.environ.get("FLASK_DEBUG
     except Exception:
         pass
 STARTED = time.time()
-log.info("FanBridge starting | version=%s in_docker=%s", APP_VERSION or "unknown", str(_in_docker()).lower())
+
+def _should_log_startup() -> bool:
+    """Log once across Flask's reloader and always in non-reloader contexts.
+
+    - If WERKZEUG_RUN_MAIN is unset (no reloader or production like gunicorn), log.
+    - If set, only log when it's the reloader child (== 'true').
+    """
+    rm = os.environ.get("WERKZEUG_RUN_MAIN")
+    return (rm is None) or (rm == "true")
+
+if _should_log_startup():
+    log.info("FanBridge starting | version=%s in_docker=%s", APP_VERSION or "unknown", str(_in_docker()).lower())
 
 
 def _default_config_path() -> str:
@@ -173,10 +188,11 @@ SERIAL_PREF = os.environ.get("FANBRIDGE_SERIAL_PORT", "").strip()
 SERIAL_BAUD = int(os.environ.get("FANBRIDGE_SERIAL_BAUD", "115200") or "115200")
 
 try:
-    log.info(
-        "paths | config=%s users=%s disks_ini=%s exists=%s serial_pref=%s baud=%s",
-        CONFIG_PATH, USERS_PATH, DISKS_INI, str(os.path.exists(DISKS_INI)).lower(), os.environ.get("FANBRIDGE_SERIAL_PORT", ""), SERIAL_BAUD
-    )
+    if _should_log_startup():
+        log.info(
+            "paths | config=%s users=%s disks_ini=%s exists=%s serial_pref=%s baud=%s",
+            CONFIG_PATH, USERS_PATH, DISKS_INI, str(os.path.exists(DISKS_INI)).lower(), os.environ.get("FANBRIDGE_SERIAL_PORT", ""), SERIAL_BAUD
+        )
 except Exception:
     pass
 

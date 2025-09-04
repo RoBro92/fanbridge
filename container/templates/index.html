@@ -106,6 +106,24 @@
       color: transparent;
       font-weight: 800;
     }
+    /* Compact dropdown menu pill */
+    .menu { position: relative; display:inline-block; }
+    .menu-list {
+      position: absolute; right: 0; top: calc(100% + 6px);
+      background: var(--cardbg); color: var(--fg);
+      border: 1px solid var(--border); border-radius: 10px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.25);
+      min-width: 180px; padding: 6px;
+      z-index: 1500;
+    }
+    .menu-item {
+      display: block; width: 100%; text-align: left;
+      padding: 8px 10px; border: none; background: transparent;
+      border-radius: 6px; cursor: pointer; color: var(--fg);
+    }
+    .menu-item:hover { background: var(--pillbg); }
+    /* Prevent header pills from overflowing too far; allow wrap neatly */
+    .meta { color: #666; margin-bottom: 16px; max-width: 905px; }
   </style>
 </head>
 <body data-poll="{{ poll_s|int }}" data-version="{{ version or '—' }}">
@@ -117,9 +135,14 @@
     <button id="pollbtn" class="pill clickable" type="button" title="Click to change the refresh interval (3–60 seconds)">refresh: …</button>
     <span id="mtime" class="pill">disks.ini: …</span>
     <span id="updated" class="pill" title="">updated: …</span>
-    <button id="themeToggle" class="pill" type="button">Theme: …</button>
-    <button id="pwbtn" class="pill" type="button" title="Change your login password">Change password</button>
-    <button id="logoutBtn" class="pill" type="button" title="End session and clear login">Logout</button>
+    <div class="menu">
+      <button id="menuBtn" class="pill" type="button" aria-haspopup="true" aria-expanded="false">Menu ▾</button>
+      <div id="menuList" class="menu-list" role="menu" aria-labelledby="menuBtn" style="display:none;">
+        <button id="menuTheme"  class="menu-item" role="menuitem">Theme: …</button>
+        <button id="menuPw"     class="menu-item" role="menuitem">Change password</button>
+        <button id="menuLogout" class="menu-item" role="menuitem">Logout</button>
+      </div>
+    </div>
   </div>
 
   <div id="statusBanner" class="banner warn"></div>
@@ -606,29 +629,78 @@ function applyValidation(){
       if (inp) inp.addEventListener('keydown', (ev)=>{ if (ev.key === 'Enter') savePoll(); });
     })();
 
-    const logoutBtn = document.getElementById('logoutBtn');
-    if (logoutBtn) {
-      logoutBtn.addEventListener('click', async () => {
+    // --- Dropdown Menu (Theme / Change password / Logout) ---
+    (function(){
+      const btn   = document.getElementById('menuBtn');
+      const list  = document.getElementById('menuList');
+      const mTheme  = document.getElementById('menuTheme');
+      const mPw     = document.getElementById('menuPw');
+      const mLogout = document.getElementById('menuLogout');
+
+      function openMenu(){ if (list){ list.style.display='block'; btn.setAttribute('aria-expanded','true'); } }
+      function closeMenu(){ if (list){ list.style.display='none'; btn.setAttribute('aria-expanded','false'); } }
+      function toggleMenu(e){ e.stopPropagation(); if (!list) return;
+        list.style.display = (list.style.display === 'block') ? 'none' : 'block';
+        btn.setAttribute('aria-expanded', list.style.display === 'block' ? 'true' : 'false');
+      }
+
+      if (btn) btn.addEventListener('click', toggleMenu);
+      // Close when clicking outside
+      document.addEventListener('click', (ev)=> {
+        if (!list || !btn) return;
+        const within = btn.contains(ev.target) || list.contains(ev.target);
+        if (!within) closeMenu();
+      });
+
+      // Theme toggle now lives in menu
+      if (mTheme) mTheme.addEventListener('click', ()=> {
+        const next = document.body.classList.contains('dark') ? 'light' : 'dark';
+        applyTheme(next);
+        // Update menu label
+        mTheme.textContent = 'Theme: ' + (next === 'dark' ? 'Dark' : 'Light');
+        closeMenu();
+      });
+
+      // Open Change Password modal
+      if (mPw) mPw.addEventListener('click', ()=> {
+        const btnOpen = document.getElementById('pwbtn');
+        // For backward compatibility, call the modal opener directly:
+        const modal = document.getElementById('pwModal');
+        if (modal){
+          // emulate previous openModal() logic
+          const err = document.getElementById('pw_error');
+          const inpCur = document.getElementById('pw_current');
+          const inpNew = document.getElementById('pw_new');
+          const inpConf= document.getElementById('pw_confirm');
+          if (err) err.textContent = '';
+          if (inpCur) inpCur.value = '';
+          if (inpNew) inpNew.value = '';
+          if (inpConf) inpConf.value= '';
+          modal.style.display = 'flex';
+          setTimeout(()=> inpCur && inpCur.focus(), 0);
+        }
+        closeMenu();
+      });
+
+      // Logout
+      if (mLogout) mLogout.addEventListener('click', async ()=> {
         try {
           const r = await fetch('/logout', { method: 'POST', headers: { 'X-CSRF-Token': CSRF } });
-          if (r.ok) {
-            // Reload to land on login screen
-            location.reload();
-          } else {
-            showToast('Logout failed', 'error');
-          }
-        } catch (e) {
-          console.error(e);
-          showToast('Logout error', 'error');
-        }
+          if (r.ok) location.reload(); else showToast('Logout failed', 'error');
+        } catch(e){ console.error(e); showToast('Logout error', 'error'); }
+        closeMenu();
       });
-    }
+
+      // Initialize theme label once
+      if (mTheme){
+        mTheme.textContent = 'Theme: ' + (document.body.classList.contains('dark') ? 'Dark' : 'Light');
+      }
+    })();
 
 
     // ---- Change password modal ----
     (function () {
       const modal = document.getElementById('pwModal');
-      const btnOpen = document.getElementById('pwbtn');
       const btnCancel = document.getElementById('pw_cancel');
       const btnSave = document.getElementById('pw_save');
       const inpCur = document.getElementById('pw_current');
@@ -650,7 +722,6 @@ function applyValidation(){
         modal.style.display = 'none';
       }
 
-      if (btnOpen) btnOpen.addEventListener('click', openModal);
       if (btnCancel) btnCancel.addEventListener('click', closeModal);
 
       if (btnSave) btnSave.addEventListener('click', async () => {
@@ -793,9 +864,10 @@ function applyValidation(){
     function applyTheme(t){
       const dark = (t === 'dark');
       document.body.classList.toggle('dark', dark);
-      const btn = document.getElementById('themeToggle');
-      if (btn) btn.textContent = 'Theme: ' + (dark ? 'Dark' : 'Light');
       try { localStorage.setItem(THEME_KEY, dark ? 'dark' : 'light'); } catch(e) {}
+      // Update menu item label if present
+      const mTheme = document.getElementById('menuTheme');
+      if (mTheme) mTheme.textContent = 'Theme: ' + (dark ? 'Dark' : 'Light');
     }
     (function(){
       let pref = 'light';
@@ -804,11 +876,9 @@ function applyValidation(){
           (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
       } catch(e) {}
       applyTheme(pref);
-      const tbtn = document.getElementById('themeToggle');
-      if (tbtn) tbtn.addEventListener('click', ()=> {
-        const next = document.body.classList.contains('dark') ? 'light' : 'dark';
-        applyTheme(next);
-      });
+      // Update menu item label if present
+      const mTheme = document.getElementById('menuTheme');
+      if (mTheme) mTheme.textContent = 'Theme: ' + (pref === 'dark' ? 'Dark' : 'Light');
     })();
   </script>
   <div id="toastHost" class="toast-container" aria-live="polite" aria-atomic="true"></div>
