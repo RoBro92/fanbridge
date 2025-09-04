@@ -19,7 +19,6 @@ FanBridge is a Dockerised Unraid service designed to monitor hard drive temperat
 
 Run fanbridge easily via Docker or as an Unraid app:
 
-```
 
 ### Unraid App
 
