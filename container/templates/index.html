@@ -373,9 +373,22 @@ function applyValidation(){
       return "ok";
     };
 
+    // --- fetch with timeout helper (to avoid hanging connections) ---
+    async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const resp = await fetch(url, { ...options, signal: controller.signal });
+        return resp;
+      } finally {
+        clearTimeout(id);
+      }
+    }
+
     async function refresh() {
       try {
-        const r = await fetch('/api/status', { cache: 'no-store' });
+        // extend timeout to tolerate slower disks.ini reads / network hiccups
+        const r = await fetchWithTimeout('/api/status', { cache: 'no-store' }, Math.max(10000, Math.min(25000, (pollSeconds || 7) * 2000)));
         const j = await r.json();
 
         const VERSION_FALLBACK = document.body.dataset.version || '—';
@@ -484,13 +497,17 @@ function applyValidation(){
           applyValidation();
         }
 
-        // If we successfully refreshed, remove any lingering error banner
-        if (document.getElementById('statusBanner').style.display === 'block' && !bannerMsg) {
+        // If we successfully refreshed (i.e., no fetch error) and there is no stale warning, clear any error banner.
+        const sb = document.getElementById('statusBanner');
+        if (sb && sb.style.display === 'block' && !bannerMsg) {
           setBanner('');
         }
       } catch (e) {
         console.error(e);
         setBanner('Unable to fetch /api/status — check container is running and network is reachable.', 'error');
+        if (e.name === 'AbortError') {
+          console.warn('Status fetch aborted due to timeout.');
+        }
       }
     }
 
