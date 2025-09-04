@@ -3,9 +3,9 @@ version: "3.9"
 services:
   fanbridge:
     build:
-      # Build using the container folder as context so COPY paths resolve
-      context: ./container
-      dockerfile: Dockerfile
+      # Use repo root as context so we can include RELEASE.md in image
+      context: .
+      dockerfile: container/Dockerfile
     image: ghcr.io/robro92/fanbridge:latest
 
     # Runtime env (optional)
@@ -19,6 +19,11 @@ services:
     # Appdata (so your config survives restarts)
     volumes:
       - ./dev-appdata:/config
+
+      # Dev-only: live-edit templates and static assets without rebuilds.
+      # Uncomment these lines locally to bind mount your working tree into the container.
+      # - ./container/templates:/app/templates:ro
+      # - ./container/static:/app/static:ro
 
       # If you are building/running on Unraid host itself, you can map disks.ini:
       # - /var/local/emhttp/disks.ini:/unraid/disks.ini:ro

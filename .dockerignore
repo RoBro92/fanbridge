@@ -1,0 +1,10 @@
+# Exclude files not needed in the Docker build context
+.git
+.venv
+dev-appdata
+**/__pycache__
+**/*.pyc
+.DS_Store
+
+# Do not include local-dev .env inside the image
+container/.env

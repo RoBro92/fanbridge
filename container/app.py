@@ -1,18 +1,15 @@
 from flask import Flask, jsonify, request, render_template
 import os, time, yaml, json, configparser, glob, pathlib
 
-# Load environment variables from possible .env locations
 try:
-    from dotenv import load_dotenv  # type: ignore
+    from dotenv import load_dotenv  
 except Exception:
-    load_dotenv = None  # fallback if not installed
+    load_dotenv = None  
 
-# Resolve paths relative to this file
 _BASE = pathlib.Path(__file__).resolve().parent
-_PROJECT_ROOT = _BASE.parent  # repo root if container copies to /app
+_PROJECT_ROOT = _BASE.parent 
 
 if load_dotenv:
-    # Load order: project root .env, /app/.env, and /config/.env (mounted on Unraid)
     for _p in (
         _PROJECT_ROOT / ".env",
         _BASE / ".env",
@@ -58,8 +55,17 @@ def _read_version_from_release() -> str | None:
 # Canonical version source: RELEASE.md only.
 # If not found, leave empty so UI shows "—".
 APP_VERSION = _read_version_from_release() or None
+# Local dev override: show "local" when explicitly requested via .env
+if os.environ.get("FANBRIDGE_FORCE_LOCAL_VERSION"):
+    APP_VERSION = "local"
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
+if os.environ.get("TEMPLATES_AUTO_RELOAD") == "1" or os.environ.get("FLASK_DEBUG"):
+    try:
+        app.config["TEMPLATES_AUTO_RELOAD"] = True
+        app.jinja_env.auto_reload = True
+    except Exception:
+        pass
 STARTED = time.time()
 
 # Paths

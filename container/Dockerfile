@@ -6,15 +6,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# OCI image labels (no embedded version; app reads from RELEASE.md at runtime)
 LABEL org.opencontainers.image.title="fanbridge" \
       org.opencontainers.image.description="FanBridge – Unraid drive temp → PWM fan control bridge" \
       org.opencontainers.image.source="https://github.com/RoBro92/fanbridge" \
       org.opencontainers.image.licenses="MIT"
 
-COPY requirements.txt .
+COPY container/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
-COPY . /app/
+COPY container/ /app/
+COPY RELEASE.md /app/RELEASE.md
 
 ENV PYTHONUNBUFFERED=1
 ENV FANBRIDGE_CONFIG=/config/config.yml

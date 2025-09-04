@@ -25,7 +25,9 @@ jobs:
       - name: Build & Push
         uses: docker/build-push-action@v6
         with:
-          context: ./container
+          # Use repo root as context so RELEASE.md is included in the image
+          context: .
+          file: container/Dockerfile
           push: true
           no-cache: true
           tags: |
