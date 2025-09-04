@@ -429,17 +429,27 @@ def probe_serial_open(port: str, baud: int | None = None):
     try:
         s = serial.Serial(port=port, baudrate=baud or SERIAL_BAUD, timeout=0.2)
         try:
-            ok = True  # handshake can be added later
+            ok = True
         finally:
             s.close()
         return ok, "ok"
     except Exception as e:
-        # Log and propagate error string so callers can display context
+        msg = str(e)
+        # Permission hints
+        lower = msg.lower()
+        if any(k in lower for k in ("permission", "denied", "operation not permitted")):
+            msg = (
+                f"{msg} (hint: add --device {port}, "
+                "Extra Params: --device-cgroup-rule='c 166:* rmw' --device-cgroup-rule='c 188:* rmw' "
+                "--group-add=16, and map /dev/serial/by-id if available)"
+            )
         try:
-            logging.getLogger("fanbridge").warning("serial open failed | port=%s baud=%s err=%s", port, baud or SERIAL_BAUD, str(e))
+            logging.getLogger("fanbridge").warning(
+                "serial open failed | port=%s baud=%s err=%s", port, baud or SERIAL_BAUD, msg
+            )
         except Exception:
             pass
-        return False, str(e)
+        return False, msg
 
 def get_serial_status(full: bool = True):
     """Build a status dict for /api/serial/status and embed in /api/status."""
