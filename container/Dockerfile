@@ -6,6 +6,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# Build-time version; recommend passing from RELEASE.md like:
+#   docker build --build-arg FANBRIDGE_VERSION=$(sed -n 's/^Version:\s*//p' fanbridge/RELEASE.md | head -1) .
 ARG FANBRIDGE_VERSION=dev
 ENV FANBRIDGE_VERSION=${FANBRIDGE_VERSION}
 # OCI image labels

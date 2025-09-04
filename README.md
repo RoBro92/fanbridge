@@ -10,3 +10,10 @@ Endpoints:
 ```bash
 docker compose up --build
 # open http://localhost:8080
+```
+
+## Changelog
+
+- See `fanbridge/RELEASE.md` for the canonical version and changelog.
+  - Update the `Version:` line there for each release.
+  - Append a new changelog section per release.

@@ -23,7 +23,38 @@ if load_dotenv:
         except Exception:
             pass
 
-APP_VERSION = os.environ.get("FANBRIDGE_VERSION") or os.environ.get("VERSION") or "dev"
+def _read_version_from_release() -> str | None:
+    """Read version from project RELEASE.md. Expected first matching line formats:
+    - "Version: X.Y.Z"
+    - Markdown header like "# vX.Y.Z" or "## 1.2.3" or "## [1.2.3]".
+    Returns the version string if found, else None.
+    """
+    import re
+    candidates = [
+        _PROJECT_ROOT / "RELEASE.md",
+        _PROJECT_ROOT / "CHANGELOG.md",
+    ]
+    rx_list = [
+        re.compile(r"^\s*Version\s*:\s*([0-9]+(?:\.[0-9]+){1,3})\b", re.I),
+        re.compile(r"^\s*#+\s*v?([0-9]+\.[0-9]+(?:\.[0-9]+)?)\b"),
+        re.compile(r"^\s*\[v?([0-9]+\.[0-9]+(?:\.[0-9]+)?)\]"),
+    ]
+    for p in candidates:
+        try:
+            if not p.exists():
+                continue
+            with open(p, "r", encoding="utf-8") as f:
+                for line in f:
+                    for rx in rx_list:
+                        m = rx.search(line)
+                        if m:
+                            return m.group(1)
+        except Exception:
+            continue
+    return None
+
+# Canonical version source: RELEASE.md. Fall back to env, then "dev".
+APP_VERSION = _read_version_from_release() or os.environ.get("FANBRIDGE_VERSION") or os.environ.get("VERSION") or "dev"
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 STARTED = time.time()
