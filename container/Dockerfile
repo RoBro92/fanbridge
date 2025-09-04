@@ -6,14 +6,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Build-time version; recommend passing from RELEASE.md like:
-#   docker build --build-arg FANBRIDGE_VERSION=$(sed -n 's/^Version:\s*//p' fanbridge/RELEASE.md | head -1) .
-ARG FANBRIDGE_VERSION=dev
-ENV FANBRIDGE_VERSION=${FANBRIDGE_VERSION}
-# OCI image labels
+# OCI image labels (no embedded version; app reads from RELEASE.md at runtime)
 LABEL org.opencontainers.image.title="fanbridge" \
       org.opencontainers.image.description="FanBridge – Unraid drive temp → PWM fan control bridge" \
-      org.opencontainers.image.version="${FANBRIDGE_VERSION}" \
       org.opencontainers.image.source="https://github.com/RoBro92/fanbridge" \
       org.opencontainers.image.licenses="MIT"
 

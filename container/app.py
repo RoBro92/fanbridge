@@ -34,10 +34,12 @@ def _read_version_from_release() -> str | None:
         _PROJECT_ROOT / "RELEASE.md",
         _PROJECT_ROOT / "CHANGELOG.md",
     ]
+    # Simple semver with optional pre-release/build, e.g. 1.2.3, 1.2, v1.2.3-dev, 1.2.3+meta
+    SEMVER = r"v?([0-9]+(?:\.[0-9]+){1,2}(?:-[0-9A-Za-z\.-]+)?(?:\+[0-9A-Za-z\.-]+)?)"
     rx_list = [
-        re.compile(r"^\s*Version\s*:\s*([0-9]+(?:\.[0-9]+){1,3})\b", re.I),
-        re.compile(r"^\s*#+\s*v?([0-9]+\.[0-9]+(?:\.[0-9]+)?)\b"),
-        re.compile(r"^\s*\[v?([0-9]+\.[0-9]+(?:\.[0-9]+)?)\]"),
+        re.compile(rf"^\s*Version\s*:\s*{SEMVER}\b", re.I),
+        re.compile(rf"^\s*#+\s*{SEMVER}\b"),
+        re.compile(rf"^\s*\[{SEMVER}\]"),
     ]
     for p in candidates:
         try:
@@ -53,8 +55,9 @@ def _read_version_from_release() -> str | None:
             continue
     return None
 
-# Canonical version source: RELEASE.md. Fall back to env, then "dev".
-APP_VERSION = _read_version_from_release() or os.environ.get("FANBRIDGE_VERSION") or os.environ.get("VERSION") or "dev"
+# Canonical version source: RELEASE.md only.
+# If not found, leave empty so UI shows "—".
+APP_VERSION = _read_version_from_release() or None
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 STARTED = time.time()

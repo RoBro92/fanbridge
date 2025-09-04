@@ -6,10 +6,6 @@ services:
       # Build using the container folder as context so COPY paths resolve
       context: ./container
       dockerfile: Dockerfile
-      args:
-        # Recommended: export version from RELEASE.md before building
-        #   export FANBRIDGE_VERSION=$(sed -n 's/^Version:\\s*//p' ./RELEASE.md | head -1)
-        - FANBRIDGE_VERSION=${FANBRIDGE_VERSION:-dev}
     image: ghcr.io/robro92/fanbridge:latest
 
     # Runtime env (optional)
