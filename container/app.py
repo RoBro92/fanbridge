@@ -434,7 +434,11 @@ def probe_serial_open(port: str, baud: int | None = None):
             s.close()
         return ok, "ok"
     except Exception as e:
-        # Propagate error string; request logger will capture context
+        # Log and propagate error string so callers can display context
+        try:
+            logging.getLogger("fanbridge").warning("serial open failed | port=%s baud=%s err=%s", port, baud or SERIAL_BAUD, str(e))
+        except Exception:
+            pass
         return False, str(e)
 
 def get_serial_status(full: bool = True):
@@ -449,6 +453,16 @@ def get_serial_status(full: bool = True):
         ok, msg = probe_serial_open(preferred, SERIAL_BAUD)
         connected = ok
         message = msg
+        if not ok:
+            try:
+                lvl = logging.WARNING if any(s in str(msg).lower() for s in ("denied", "permission", "not opened", "busy")) else logging.INFO
+                logging.getLogger("fanbridge").log(
+                    lvl,
+                    "serial not connected | port=%s baud=%s reason=%s (map device and grant permissions)",
+                    preferred, SERIAL_BAUD, msg,
+                )
+            except Exception:
+                pass
     elif available:
         message = "ports detected but none selected"
 
@@ -598,10 +612,18 @@ def _req_log(resp):
         path = request.path
         meth = request.method
         code = resp.status_code
-        if path in ("/health", "/api/status", "/api/serial/status"):
-            logging.getLogger("fanbridge").debug("%s %s -> %s in %sms", meth, path, code, dur_ms)
+        lg = logging.getLogger("fanbridge")
+        # Always surface non-2xx responses
+        if code >= 500:
+            lg.error("%s %s -> %s in %sms", meth, path, code, dur_ms)
+        elif code >= 400:
+            lg.warning("%s %s -> %s in %sms", meth, path, code, dur_ms)
         else:
-            logging.getLogger("fanbridge").info("%s %s -> %s in %sms", meth, path, code, dur_ms)
+            # Success paths: keep health noisy at debug
+            if path in ("/health", "/api/status", "/api/serial/status"):
+                lg.debug("%s %s -> %s in %sms", meth, path, code, dur_ms)
+            else:
+                lg.info("%s %s -> %s in %sms", meth, path, code, dur_ms)
     except Exception:
         pass
     return resp
