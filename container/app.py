@@ -26,15 +26,39 @@ def _secret_path() -> pathlib.Path:
     return (_BASE / "secret.key") if not _in_docker() else pathlib.Path("/config/secret.key")
 
 def _load_or_create_secret() -> str:
+    """
+    Ensure all gunicorn workers share the SAME key:
+    - if file exists: read it
+    - else: atomically create then re-read
+    Handles first-boot worker race by retrying a couple of times.
+    """
     p = _secret_path()
     try:
+        # fast path
         if p.exists():
-            return p.read_text().strip()
-        key = secrets.token_urlsafe(32)
+            key = p.read_text(encoding="utf-8").strip()
+            if key:
+                return key
+
+        # create if missing/empty
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(key)
-        return key
+        tmp = p.with_suffix(".tmp")
+        key = secrets.token_urlsafe(32)
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(key)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, p)
+
+        # re-read to be 100% sure all workers see identical bytes
+        for _ in range(3):
+            k2 = p.read_text(encoding="utf-8").strip()
+            if k2:
+                return k2
+            time.sleep(0.05)
+        return key  # fallback
     except Exception:
+        # absolute last resort (won't persist across workers)
         return secrets.token_urlsafe(32)
 
 def _in_docker() -> bool:
@@ -116,6 +140,15 @@ APP_VERSION = _read_version_from_release() or None
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = _load_or_create_secret()
+
+# Session/cookie hardening + predictability
+app.config.update(
+    SESSION_COOKIE_NAME="fanbridge_session",
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=False,  # set True if you terminate TLS in front
+    SESSION_COOKIE_HTTPONLY=True,
+    PERMANENT_SESSION_LIFETIME=datetime.timedelta(days=30),
+)
 if os.environ.get("TEMPLATES_AUTO_RELOAD") == "1" or os.environ.get("FLASK_DEBUG"):
     try:
         app.config["TEMPLATES_AUTO_RELOAD"] = True
@@ -333,6 +366,7 @@ def _is_hdd(dev_name: str) -> bool:
         return rot.strip() == "1"
     return True
 
+# ---------- Unraid disks.ini parsing ----------
 def _read_disks_ini() -> list[dict]:
     """
     Parse Unraid's /var/local/emhttp/disks.ini (bind-mounted to /unraid/disks.ini).
@@ -341,12 +375,14 @@ def _read_disks_ini() -> list[dict]:
     if not os.path.exists(DISKS_INI):
         return []
 
-    cp = configparser.ConfigParser()
+    # Disable interpolation so any '%' in values doesn't explode.
+    cp = configparser.ConfigParser(interpolation=None)
     try:
-        cp.read(DISKS_INI)
+        cp.read(DISKS_INI, encoding="utf-8")
     except Exception as e:
         log.exception("Failed to parse %s: %s", DISKS_INI, e)
         return []
+    ...
 
     drives: list[dict] = []
     excludes = set(cfg.get("exclude_devices") or [])
