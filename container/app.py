@@ -135,6 +135,10 @@ CONFIG_PATH = os.environ.get("FANBRIDGE_CONFIG") or _default_config_path()
 DISKS_INI = "/unraid/disks.ini"   # bind-mount to /var/local/emhttp/disks.ini on host
 USERS_PATH = "/config/users.yml" if _in_docker() else str((_BASE / "users.local.yml"))
 
+# Serial preference and baud configurable via environment
+SERIAL_PREF = os.environ.get("FANBRIDGE_SERIAL_PORT", "").strip()
+SERIAL_BAUD = int(os.environ.get("FANBRIDGE_SERIAL_BAUD", "115200") or "115200")
+
 try:
     log.info(
         "paths | config=%s users=%s disks_ini=%s exists=%s serial_pref=%s baud=%s",
@@ -256,9 +260,7 @@ def save_config(cfg: dict):
 
 cfg = load_config()
 
-# Serial preference and baud configurable via environment
-SERIAL_PREF = os.environ.get("FANBRIDGE_SERIAL_PORT", "").strip()
-SERIAL_BAUD = int(os.environ.get("FANBRIDGE_SERIAL_BAUD", "115200") or "115200")
+    
 
 # ---------- Unraid disks.ini parsing ----------
 def _read_file(path: str) -> str | None:
