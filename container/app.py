@@ -1,6 +1,8 @@
-from flask import Flask, jsonify, request, render_template, session, redirect, url_for, make_response
-import os, time, yaml, json, configparser, glob, pathlib
-# Optional: pyserial for USB serial discovery (Arduino/RP2040)
+from flask import Flask, jsonify, request, render_template, session, redirect, url_for, make_response, g
+import os, time, yaml, json, configparser, glob, pathlib, logging, sys, traceback
+
+
+
 try:
     import serial  # type: ignore
     from serial.tools import list_ports  # type: ignore
@@ -52,6 +54,26 @@ if load_dotenv:
         except Exception:
             pass
 
+# ---------- logging setup ----------
+def _setup_logging():
+    lvl_name = os.environ.get("FANBRIDGE_LOG_LEVEL") or ("DEBUG" if os.environ.get("FLASK_DEBUG") else "INFO")
+    level = getattr(logging, str(lvl_name).upper(), logging.INFO)
+
+    root = logging.getLogger()
+    if not root.handlers:
+        handler = logging.StreamHandler(stream=sys.stdout)
+        fmt = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+        handler.setFormatter(logging.Formatter(fmt))
+        root.addHandler(handler)
+    root.setLevel(level)
+
+    # Reduce noisy libraries
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+
+_setup_logging()
+log = logging.getLogger("fanbridge")
+
 def _read_version_from_release() -> str | None:
     """Read version from project RELEASE.md. Expected first matching line formats:
     - "Version: X.Y.Z"
@@ -101,6 +123,7 @@ if os.environ.get("TEMPLATES_AUTO_RELOAD") == "1" or os.environ.get("FLASK_DEBUG
     except Exception:
         pass
 STARTED = time.time()
+log.info("FanBridge starting | version=%s in_docker=%s", APP_VERSION or "unknown", str(_in_docker()).lower())
 
 
 def _default_config_path() -> str:
@@ -111,6 +134,14 @@ def _default_config_path() -> str:
 CONFIG_PATH = os.environ.get("FANBRIDGE_CONFIG") or _default_config_path()
 DISKS_INI = "/unraid/disks.ini"   # bind-mount to /var/local/emhttp/disks.ini on host
 USERS_PATH = "/config/users.yml" if _in_docker() else str((_BASE / "users.local.yml"))
+
+try:
+    log.info(
+        "paths | config=%s users=%s disks_ini=%s exists=%s serial_pref=%s baud=%s",
+        CONFIG_PATH, USERS_PATH, DISKS_INI, str(os.path.exists(DISKS_INI)).lower(), os.environ.get("FANBRIDGE_SERIAL_PORT", ""), SERIAL_BAUD
+    )
+except Exception:
+    pass
 
 DEFAULT_CONFIG = {
     "poll_interval_seconds": 7,     # UI refresh; clamped 3–60s
@@ -196,7 +227,7 @@ def ensure_config_exists():
         os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
         with open(CONFIG_PATH, "w") as f:
             yaml.safe_dump(DEFAULT_CONFIG, f, sort_keys=False)
-        print(f"[fanbridge] Created default config at {CONFIG_PATH}")
+        log.info("Created default config at %s", CONFIG_PATH)
 
 def load_config():
     ensure_config_exists()
@@ -206,14 +237,14 @@ def load_config():
     except Exception:
         with open(CONFIG_PATH, "w") as wf:
             yaml.safe_dump(DEFAULT_CONFIG, wf, sort_keys=False)
-        print(f"[fanbridge] Rewrote unreadable config with defaults at {CONFIG_PATH}")
+        log.warning("Config unreadable; rewrote defaults at %s", CONFIG_PATH)
         return DEFAULT_CONFIG
     merged = _merge_defaults(user_cfg, DEFAULT_CONFIG)
     if merged != user_cfg:
         try:
             with open(CONFIG_PATH, "w") as f:
                 yaml.safe_dump(merged, f, sort_keys=False)
-            print("[fanbridge] Normalised config with defaults (saved).")
+            log.info("Normalised config with defaults (saved)")
         except Exception:
             pass
     return merged
@@ -312,7 +343,7 @@ def _read_disks_ini() -> list[dict]:
     try:
         cp.read(DISKS_INI)
     except Exception as e:
-        print(f"[fanbridge] Failed to parse {DISKS_INI}: {e}")
+        log.exception("Failed to parse %s: %s", DISKS_INI, e)
         return []
 
     drives: list[dict] = []
@@ -401,6 +432,7 @@ def probe_serial_open(port: str, baud: int | None = None):
             s.close()
         return ok, "ok"
     except Exception as e:
+        # Propagate error string; request logger will capture context
         return False, str(e)
 
 def get_serial_status(full: bool = True):
@@ -428,6 +460,13 @@ def get_serial_status(full: bool = True):
     }
     if not full:
         data.pop("ports", None)
+    try:
+        logging.getLogger("fanbridge").debug(
+            "serial | preferred=%s available=%s connected=%s baud=%s msg=%s ports=%s",
+            data.get("preferred"), data.get("available"), data.get("connected"), data.get("baud"), data.get("message"), len(ports)
+        )
+    except Exception:
+        pass
     return data
 
 # ---------- PWM logic ----------
@@ -470,7 +509,7 @@ def compute_status():
     # log any N/A for visibility
     for d in drives:
         if d["state"] == "N/A":
-            print(f"[fanbridge] disks.ini has no temp for {d['dev']} (type={d['type']})")
+            log.warning("disks.ini has no temp | dev=%s type=%s", d['dev'], d['type'])
 
     # Pool stats (respect user excludes)
     hdd_vals = [d["temp"] for d in drives if d.get("type") == "HDD" and not d.get("excluded") and d.get("temp") is not None]
@@ -505,7 +544,7 @@ def compute_status():
     except Exception:
         pass
 
-    return {
+    payload = {
         "drives": drives,
         "hdd": hdd,
         "ssd": ssd,
@@ -522,6 +561,14 @@ def compute_status():
         "version": APP_VERSION,
         "disks_ini_mtime": disks_mtime,
     }
+    try:
+        log.debug(
+            "status | mode=%s hdd_avg=%s ssd_avg=%s pwm=%s drives=%s",
+            mode, hdd.get("avg"), ssd.get("avg"), payload["recommended_pwm"], len(drives)
+        )
+    except Exception:
+        pass
+    return payload
 
 @app.get("/health")
 def health():
@@ -533,6 +580,39 @@ def add_no_cache(resp):
     if resp.mimetype == "application/json":
         resp.headers["Cache-Control"] = "no-store, max-age=0"
     return resp
+
+# Request timing + logging
+@app.before_request
+def _req_start_timer():
+    try:
+        g._start_ts = time.time()
+    except Exception:
+        pass
+
+@app.after_request
+def _req_log(resp):
+    try:
+        dur_ms = int((time.time() - getattr(g, "_start_ts", time.time())) * 1000)
+        path = request.path
+        meth = request.method
+        code = resp.status_code
+        if path in ("/health", "/api/status", "/api/serial/status"):
+            logging.getLogger("fanbridge").debug("%s %s -> %s in %sms", meth, path, code, dur_ms)
+        else:
+            logging.getLogger("fanbridge").info("%s %s -> %s in %sms", meth, path, code, dur_ms)
+    except Exception:
+        pass
+    return resp
+
+@app.errorhandler(404)
+def _not_found(e):
+    logging.getLogger("fanbridge").warning("404 %s %s", request.method, request.path)
+    return jsonify({"ok": False, "error": "not found", "path": request.path}), 404
+
+@app.errorhandler(Exception)
+def _unhandled(e):
+    logging.getLogger("fanbridge").exception("Unhandled error for %s %s: %s", request.method, request.path, e)
+    return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.before_request
 def _auth_and_rate():
@@ -621,7 +701,8 @@ def status():
             "baud": ss.get("baud"),
             "message": ss.get("message"),
         }
-    except Exception:
+    except Exception as e:
+        logging.getLogger("fanbridge").exception("serial status embed failed: %s", e)
         data["serial"] = {"available": False, "connected": False, "message": "error"}
     return jsonify(data)
 
