@@ -24,6 +24,7 @@ Run fanbridge easily via Docker or as an Unraid app:
 
 Install fanbridge directly through the Unraid Community Applications plugin for one-click deployment and management.
 
+
 ## Roadmap / Planned Features
 
 - Full integration with Arduino or RP2040 microcontrollers to enable real-time fan speed control based on drive temperatures.
@@ -33,5 +34,4 @@ Install fanbridge directly through the Unraid Community Applications plugin for 
 
 ## Changelog
 
-For the canonical version history and detailed changelog, please refer to `fanbridge/RELEASE.md`.  
-
+For the canonical version history and detailed changelog, please refer to `fanbridge/RELEASE.md`.

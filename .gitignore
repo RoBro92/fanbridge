@@ -9,3 +9,10 @@ __pycache__/
 .vscode/
 .venv
 .venv/
+
+# Local dev only (do not publish)
+dev-appdata/
+container/.env
+container/config.local.yml
+docker-compose.override.yml
+.env

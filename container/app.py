@@ -27,9 +27,13 @@ def _read_version_from_release() -> str | None:
     Returns the version string if found, else None.
     """
     import re
+    # Search typical locations both in dev (repo layout) and in container
+    # In container we copy RELEASE.md into the same folder as app.py (/app)
     candidates = [
-        _PROJECT_ROOT / "RELEASE.md",
+        _PROJECT_ROOT / "RELEASE.md",   # repo root (dev)
         _PROJECT_ROOT / "CHANGELOG.md",
+        _BASE / "RELEASE.md",           # alongside app.py (container)
+        pathlib.Path("RELEASE.md"),     # CWD fallback
     ]
     # Simple semver with optional pre-release/build, e.g. 1.2.3, 1.2, v1.2.3-dev, 1.2.3+meta
     SEMVER = r"v?([0-9]+(?:\.[0-9]+){1,2}(?:-[0-9A-Za-z\.-]+)?(?:\+[0-9A-Za-z\.-]+)?)"
