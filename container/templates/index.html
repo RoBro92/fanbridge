@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
   <title>FanBridge</title>
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }
@@ -27,11 +28,34 @@
     .crit { color: #d32;   font-weight: 700; }
 
     .flex { display:flex; gap:12px; align-items:center; flex-wrap: wrap; }
-    .pill.warn { border-color:#f59e0b; background:#fff7ed; color:#92400e; }
+    /* attention pills share identical emphasis */
+    .pill.warn, .pill.error { 
+      font-weight: 700;
+      border-width: 2px;
+    }
+    .pill.warn  { border-color:#f59e0b; background:#fff7ed; color:#92400e; }
+    .pill.error { border-color:#ef4444; background:#fef2f2; color:#991b1b; }
+    .warnmsg { color:#b45309; margin:6px 0 0; }
+    .errmsg  { color:#991b1b; margin:6px 0 0; }
+    .pill.clickable { cursor: pointer; position: relative; }
+    .pill.clickable::after { content: " ✎"; opacity: .75; }
+    .pill.clickable:hover { filter: brightness(1.06); }
     .small { font-size: 12px; }
     .right { float:right; }
     .footer { margin-top: 16px; }
     code { background:#f6f8fa; padding:2px 6px; border-radius:4px; }
+
+    /* Status banner & toast */
+    .banner { display:none; border:1px solid var(--border); border-radius:8px; padding:10px 12px; margin:12px 0; background: var(--pillbg); }
+    .banner.warn  { border-color:#f59e0b; background:#fff7ed; color:#92400e; }
+    .banner.error { border-color:#ef4444; background:#fef2f2; color:#991b1b; }
+
+    .toast-container { position: fixed; right: 16px; bottom: 16px; display:flex; flex-direction:column; gap:8px; z-index: 2000; }
+    .toast { padding:10px 12px; border-radius:8px; border:1px solid var(--border); background: var(--cardbg); box-shadow: 0 6px 18px rgba(0,0,0,.2); min-width: 220px; }
+    .toast.info  { border-color:#93c5fd; background:#eff6ff; color:#1e3a8a; }
+    .toast.ok    { border-color:#86efac; background:#ecfdf5; color:#065f46; }
+    .toast.warn  { border-color:#f59e0b; background:#fff7ed; color:#92400e; }
+    .toast.error { border-color:#ef4444; background:#fef2f2; color:#991b1b; }
 
     .panel { border:1px solid var(--border); border-radius:8px; padding:12px; background: var(--cardbg); max-width: 880px; margin-top:16px; }
     .panel h2 { margin:0 0 8px; font-size:16px; }
@@ -59,6 +83,7 @@
       border: 1px solid var(--border);
       color-scheme: light;
     }
+    input[type="password"] { width: 100%; padding:6px 8px; }
     body.dark input, body.dark select { color-scheme: dark; }
 
     /* Improve visibility of number input arrows in dark mode (WebKit/Blink) */
@@ -88,12 +113,15 @@
 
   <div class="meta flex">
     <span id="ver"   class="pill">version: {{ version or "—" }}</span>
-    <span class="pill">refresh: every {{ poll_s }}s</span>
+    <button id="pollbtn" class="pill clickable" type="button" title="Click to change the refresh interval (3–60 seconds)">refresh: …</button>
     <span id="mtime" class="pill">disks.ini: …</span>
-    <span class="small muted" id="updated">last update: …</span>
+    <span id="updated" class="pill" title="">updated: …</span>
     <button id="themeToggle" class="pill" type="button">Theme: …</button>
-    <span id="dirtyFlag" class="pill warn" style="display:none;">Unsaved changes</span>
+    <button id="pwbtn" class="pill" type="button" title="Change your login password">Change password</button>
+    <button id="logoutBtn" class="pill" type="button" title="End session and clear login">Logout</button>
   </div>
+
+  <div id="statusBanner" class="banner warn"></div>
 
   <table id="tbl">
     <thead>
@@ -120,7 +148,35 @@
   </table>
 
   <div class="panel">
-    <h1>Configuration</h1>
+    <div class="config-header" style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+      <h1 style="margin:0;">Configuration</h1>
+      <div class="config-actions" style="display:flex; align-items:center; gap:10px;">
+        <div id="configFlags" style="display:flex; gap:8px; align-items:center;">
+          <span id="dirtyFlag" class="pill warn" style="display:none;">Unsaved changes</span>
+          <span id="valFlag" class="pill error" style="display:none;">Fix validation errors</span>
+        </div>
+        <button id="resetDefaults" class="pill" type="button" title="Reset overrides and fan curves to defaults">Reset to defaults</button>
+  </div>
+</div>
+
+  <!-- Refresh Interval Modal -->
+  <div id="pollModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); align-items:center; justify-content:center; z-index:1000;">
+    <div style="background: var(--cardbg); color: var(--fg); border:1px solid var(--border); border-radius:10px; padding:16px; width: min(420px, 92vw); box-shadow: 0 10px 30px rgba(0,0,0,.3);">
+      <h3 style="margin:0 0 10px;">Set refresh interval</h3>
+      <p class="small" style="margin:0 0 10px; color:var(--muted);">
+        Choose how often the page polls Unraid for drive temperatures (3–60 seconds).
+      </p>
+      <div class="inputs" style="align-items:center;">
+        <label for="poll_input">Seconds</label>
+        <input type="number" id="poll_input" min="3" max="60" step="1" value="7" style="width:96px;">
+      </div>
+      <div id="poll_error" class="small" style="margin-top:8px; color:#b91c1c;"></div>
+      <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:14px;">
+        <button id="poll_cancel">Cancel</button>
+        <button id="poll_save">Save</button>
+      </div>
+    </div>
+  </div>
 
     <h2>Single Drive Max Overrides</h2>
     <div class="inputs">
@@ -143,6 +199,7 @@
     <div class="inputs" style="align-items:flex-start; margin-top:6px;">
       <div class="rowlabel small muted" style="width:130px;">PWM (%)</div>
       <div class="grid" id="curveH_pw"></div>
+      <div id="curveH_warn" class="warnmsg small" style="display:none;"></div>
     </div>
 
     <h2 style="margin:12px 0 6px;">SSD fan curve</h2>
@@ -153,10 +210,11 @@
     <div class="inputs" style="align-items:flex-start; margin-top:6px;">
       <div class="rowlabel small muted" style="width:130px;">PWM (%)</div>
       <div class="grid" id="curveS_pw"></div>
+      <div id="curveS_warn" class="warnmsg small" style="display:none;"></div>
     </div>
 
     <div class="inputs" style="margin-top:10px;">
-      <button id="savecurves">Save</button>
+      <button id="savecurves" disabled>Save</button>
       <button id="discardcurves" style="display:none;">Discard</button>
     </div>
   </div>
@@ -165,9 +223,85 @@
     <a href="/api/status">API</a> &nbsp;|&nbsp; <a href="/health">Health</a>
   </div>
 
+  <!-- Change Password Modal -->
+  <div id="pwModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); align-items:center; justify-content:center; z-index:1000;">
+    <div style="background: var(--cardbg); color: var(--fg); border:1px solid var(--border); border-radius:10px; padding:16px; width: min(420px, 92vw); box-shadow: 0 10px 30px rgba(0,0,0,.3);">
+      <h3 style="margin:0 0 10px;">Change password</h3>
+      <div class="inputs" style="flex-direction:column; align-items:stretch; gap:10px;">
+        <label>Current password
+          <input type="password" id="pw_current" autocomplete="current-password">
+        </label>
+        <label>New password
+          <input type="password" id="pw_new" autocomplete="new-password">
+        </label>
+        <label>Confirm new password
+          <input type="password" id="pw_confirm" autocomplete="new-password">
+        </label>
+      </div>
+      <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:14px;">
+        <button id="pw_cancel">Cancel</button>
+        <button id="pw_save">Save</button>
+      </div>
+      <div id="pw_error" class="small muted" style="margin-top:8px; color:#b91c1c;"></div>
+    </div>
+  </div>
+
+  <!-- Reset to Defaults Modal -->
+  <div id="resetModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); align-items:center; justify-content:center; z-index:1000;">
+    <div style="background: var(--cardbg); color: var(--fg); border:1px solid var(--border); border-radius:10px; padding:16px; width: min(420px, 92vw); box-shadow: 0 10px 30px rgba(0,0,0,.3);">
+      <h3 style="margin:0 0 10px;">Reset to defaults</h3>
+      <p class="small" style="margin:0 0 10px; color:var(--muted);">
+        This will restore the single‑drive temperature overrides and both fan curves to their factory defaults.
+      </p>
+      <p style="margin:0 0 12px; font-weight:600;">Are you sure you want to proceed?</p>
+      <div style="display:flex; gap:10px; justify-content:flex-end;">
+        <button id="reset_cancel">Cancel</button>
+        <button id="reset_confirm">Reset</button>
+      </div>
+      <div id="reset_error" class="small" style="margin-top:8px; color:#b91c1c;"></div>
+    </div>
+  </div>
+
+
   <script>
-    const POLL_MS = (parseInt(document.body.dataset.poll || '7', 10)) * 1000;
+    let pollSeconds = parseInt(document.body.dataset.poll || '7', 10);
+    let pollTimer = null;
+    function startPolling(){
+      if (pollTimer) { clearInterval(pollTimer); }
+      pollTimer = setInterval(refresh, Math.max(3, Math.min(60, pollSeconds)) * 1000);
+      const pb = document.getElementById('pollbtn');
+      if (pb) pb.textContent = `refresh: every ${Math.max(3, Math.min(60, pollSeconds))}s`;
+      if (pb) pb.title = 'Click to change the refresh interval (3–60 seconds)';
+    }
     const fmt = (v) => (v === null || v === undefined) ? "—" : v;
+    const CSRF = document.querySelector('meta[name="csrf-token"]').content;
+
+    // --- Status & errors surfacing ---
+    function formatAge(ms){
+      if (ms <= 0 || isNaN(ms)) return 'n/a';
+      const s = Math.floor(ms/1000);
+      const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), ss = s%60;
+      if (h>0) return `${h}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')} ago`;
+      return `${m}:${String(ss).padStart(2,'0')} ago`;
+    }
+    function setBanner(msg, type='warn'){
+      const b = document.getElementById('statusBanner');
+      if (!b) return;
+      if (!msg) { b.style.display='none'; b.textContent=''; b.classList.remove('warn','error'); return; }
+      b.textContent = msg;
+      b.classList.remove('warn','error');
+      b.classList.add(type);
+      b.style.display='block';
+    }
+    function showToast(msg, type='ok', timeoutMs=3000){
+      const host = document.getElementById('toastHost');
+      if (!host) return;
+      const el = document.createElement('div');
+      el.className = `toast ${type}`;
+      el.textContent = msg;
+      host.appendChild(el);
+      setTimeout(()=>{ el.style.opacity='0'; el.style.transition='opacity .25s'; setTimeout(()=> el.remove(), 260); }, timeoutMs);
+    }
 
     // dynamic colour class based on per-type override thresholds
     let OVERRIDE_HDD = 45;
@@ -184,6 +318,52 @@
       document.getElementById('discardbtn').style.display = DIRTY_OVR ? '' : 'none';
       document.getElementById('discardcurves').style.display = DIRTY_CURVES ? '' : 'none';
     }
+    
+    // ---- Curve validation helpers ----
+function isStrictlyIncreasing(arr){
+  for (let i=1;i<arr.length;i++){ if (!(arr[i] > arr[i-1])) return false; }
+  return true;
+}
+function isNonDecreasing01(arr){
+  for (let i=0;i<arr.length;i++){
+    const v = arr[i];
+    if (isNaN(v) || v < 0 || v > 100) return false;
+    if (i>0 && v < arr[i-1]) return false;
+  }
+  return true;
+}
+function validatePair(th, pw){
+  if (th.length !== pw.length) return { ok:false, msg:`Lengths differ (thresholds=${th.length}, pwm=${pw.length}).` };
+  if (th.length === 0) return { ok:false, msg:'Add at least one step.' };
+  if (!isStrictlyIncreasing(th)) return { ok:false, msg:'Thresholds must increase (e.g. 25, 28, 32...).' };
+  if (!isNonDecreasing01(pw)) return { ok:false, msg:'PWM must be 0–100 and non-decreasing (e.g. 0, 10, 10, 20...).' };
+  return { ok:true, msg:'' };
+}
+function gatherCurveInputs(containerId){
+  return Array.from(document.querySelectorAll(`#${containerId} input`)).map(i=>parseInt(i.value||'0',10));
+}
+function showWarn(id, msg){
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (msg){ el.textContent = msg; el.style.display=''; }
+  else { el.textContent=''; el.style.display='none'; }
+}
+function applyValidation(){
+  // read current editors (fall back to arrays if inputs not yet built)
+  const hth = document.querySelectorAll('#curveH_th input').length ? gatherCurveInputs('curveH_th') : HTH.slice();
+  const hpw = document.querySelectorAll('#curveH_pw input').length ? gatherCurveInputs('curveH_pw') : HPW.slice();
+  const sth = document.querySelectorAll('#curveS_th input').length ? gatherCurveInputs('curveS_th') : STH.slice();
+  const spw = document.querySelectorAll('#curveS_pw input').length ? gatherCurveInputs('curveS_pw') : SPW.slice();
+  const vh = validatePair(hth, hpw);
+  const vs = validatePair(sth, spw);
+  showWarn('curveH_warn', vh.ok ? '' : vh.msg);
+  showWarn('curveS_warn', vs.ok ? '' : vs.msg);
+  const saveBtn = document.getElementById('savecurves');
+  const valFlag = document.getElementById('valFlag');
+  const ok = vh.ok && vs.ok;
+  if (saveBtn) saveBtn.disabled = !ok;
+  if (valFlag) valFlag.style.display = ok ? 'none' : '';
+}
 
     const clsForTemp = (t, type) => {
       if (t === null || t === undefined) return "muted";
@@ -203,9 +383,25 @@
         document.getElementById('pwm').textContent = (j.recommended_pwm ?? '—') + '%';
 
         const now = new Date();
-        document.getElementById('updated').textContent = 'last update: ' + now.toLocaleString();
-        const mt = j.disks_ini_mtime ? new Date(j.disks_ini_mtime * 1000).toLocaleTimeString() : 'n/a';
-        document.getElementById('mtime').textContent = 'disks.ini: ' + mt;
+        const updEl = document.getElementById('updated');
+        updEl.textContent = 'updated: ' + now.toLocaleTimeString();
+        updEl.title = 'FanBridge last fetched /api/status at: ' + now.toLocaleString();
+
+        // disks.ini mtime pill + banner logic
+        const mtEl = document.getElementById('mtime');
+        let mtLabel = 'n/a';
+        let bannerMsg = '';
+        if (j.disks_ini_mtime){
+          const wrote = j.disks_ini_mtime * 1000;
+          mtLabel = formatAge(Date.now() - wrote);
+          mtEl.title = 'Unraid wrote /var/local/emhttp/disks.ini at: ' + new Date(wrote).toLocaleString();
+          if ((Date.now() - wrote) > 60000) bannerMsg = 'Warning: /unraid/disks.ini appears stale (older than 60s).';
+        } else {
+          mtEl.title = 'disks.ini timestamp not available';
+          bannerMsg = 'Could not read /unraid/disks.ini (is the path mapped read-only to the container?)';
+        }
+        mtEl.textContent = 'disks.ini: ' + mtLabel;
+        setBanner(bannerMsg || '', bannerMsg ? 'warn' : 'warn');
 
         // sync dynamic thresholds from server so colours reflect current settings
         if (typeof j.override_hdd_c === 'number') OVERRIDE_HDD = j.override_hdd_c;
@@ -217,6 +413,15 @@
 
         const rows = document.getElementById('rows');
         rows.innerHTML = '';
+        if (!j.drives || j.drives.length === 0) {
+          const tr = document.createElement('tr');
+          const td = document.createElement('td');
+          td.colSpan = 5;
+          td.className = 'muted';
+          td.textContent = 'No drives detected.';
+          tr.appendChild(td);
+          rows.appendChild(tr);
+        }
         (j.drives || []).forEach(d => {
           const tr = document.createElement('tr');
           const tdDev = document.createElement('td'); tdDev.textContent = d.dev ? (d.slot ? (d.dev + ' (' + d.slot + ')') : d.dev) : '—';
@@ -233,7 +438,7 @@
             try {
               await fetch('/api/exclude', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
                 body: JSON.stringify({ dev: d.dev, excluded: !e.target.checked })
               });
             } catch (err) { console.error(err); }
@@ -272,14 +477,172 @@
 
           for (let i=0;i<nH;i++) { ch_th.appendChild(makeNum(HTH[i]!==undefined?HTH[i]:0)); ch_pw.appendChild(makeNum(HPW[i]!==undefined?HPW[i]:0)); }
           for (let i=0;i<nS;i++) { cs_th.appendChild(makeNum(STH[i]!==undefined?STH[i]:0)); cs_pw.appendChild(makeNum(SPW[i]!==undefined?SPW[i]:0)); }
+          // validate after rebuilding editors
+          document.querySelectorAll('#curveH_th input, #curveH_pw input, #curveS_th input, #curveS_pw input')
+            .forEach(inp => inp.addEventListener('input', applyValidation));
+          // Initial validation state
+          applyValidation();
+        }
+
+        // If we successfully refreshed, remove any lingering error banner
+        if (document.getElementById('statusBanner').style.display === 'block' && !bannerMsg) {
+          setBanner('');
         }
       } catch (e) {
         console.error(e);
+        setBanner('Unable to fetch /api/status — check container is running and network is reachable.', 'error');
       }
     }
 
     refresh();
-    setInterval(refresh, POLL_MS);
+    startPolling();
+
+    // --- Themed Refresh Interval Modal ---
+    (function(){
+      const btn = document.getElementById('pollbtn');
+      const modal = document.getElementById('pollModal');
+      const inp = document.getElementById('poll_input');
+      const cancelBtn = document.getElementById('poll_cancel');
+      const saveBtn = document.getElementById('poll_save');
+      const err = document.getElementById('poll_error');
+
+      function openModal(){
+        if (!modal) return;
+        if (err) err.textContent = '';
+        if (inp) inp.value = String(Math.max(3, Math.min(60, pollSeconds || 7)));
+        modal.style.display = 'flex';
+        setTimeout(()=> inp && inp.focus(), 0);
+      }
+      function closeModal(){ if (modal) modal.style.display = 'none'; }
+
+      if (btn) btn.addEventListener('click', openModal);
+      if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
+      if (modal) modal.addEventListener('click', (ev)=>{ if (ev.target === modal) closeModal(); });
+
+      async function savePoll(){
+        if (!inp) return;
+        if (err) err.textContent = '';
+        let val = parseInt(inp.value, 10);
+        if (isNaN(val)) { if (err) err.textContent = 'Please enter a number between 3 and 60.'; return; }
+        if (val < 3) val = 3;
+        if (val > 60) val = 60;
+
+        try {
+          // Update UI + timer
+          pollSeconds = val;
+          document.body.dataset.poll = String(val);
+          startPolling();
+
+          // Persist to server
+          const r = await fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
+            body: JSON.stringify({ poll_interval_seconds: val })
+          });
+          if (!r.ok) {
+            if (err) err.textContent = 'Failed to save. Please try again.';
+            showToast('Failed to save refresh interval', 'error');
+            return;
+          }
+          showToast(`Refresh set to ${val}s`, 'ok');
+          closeModal();
+        } catch(e){
+          console.error(e);
+          if (err) err.textContent = 'Unexpected error.';
+          showToast('Error saving refresh interval', 'error');
+        }
+      }
+      if (saveBtn) saveBtn.addEventListener('click', savePoll);
+      if (inp) inp.addEventListener('keydown', (ev)=>{ if (ev.key === 'Enter') savePoll(); });
+    })();
+
+    const logoutBtn = document.getElementById('logoutBtn');
+    if (logoutBtn) {
+      logoutBtn.addEventListener('click', async () => {
+        try {
+          const r = await fetch('/logout', { method: 'POST', headers: { 'X-CSRF-Token': CSRF } });
+          if (r.ok) {
+            // Reload to land on login screen
+            location.reload();
+          } else {
+            showToast('Logout failed', 'error');
+          }
+        } catch (e) {
+          console.error(e);
+          showToast('Logout error', 'error');
+        }
+      });
+    }
+
+
+    // ---- Change password modal ----
+    (function () {
+      const modal = document.getElementById('pwModal');
+      const btnOpen = document.getElementById('pwbtn');
+      const btnCancel = document.getElementById('pw_cancel');
+      const btnSave = document.getElementById('pw_save');
+      const inpCur = document.getElementById('pw_current');
+      const inpNew = document.getElementById('pw_new');
+      const inpConf = document.getElementById('pw_confirm');
+      const err = document.getElementById('pw_error');
+
+      function openModal() {
+        if (!modal) return;
+        err.textContent = '';
+        inpCur.value = '';
+        inpNew.value = '';
+        inpConf.value = '';
+        modal.style.display = 'flex';
+        setTimeout(() => inpCur.focus(), 0);
+      }
+      function closeModal() {
+        if (!modal) return;
+        modal.style.display = 'none';
+      }
+
+      if (btnOpen) btnOpen.addEventListener('click', openModal);
+      if (btnCancel) btnCancel.addEventListener('click', closeModal);
+
+      if (btnSave) btnSave.addEventListener('click', async () => {
+        err.textContent = '';
+        const current = inpCur.value || '';
+        const next = inpNew.value || '';
+        const confirmPw = inpConf.value || '';
+        if (!current || !next || !confirmPw) {
+          err.textContent = 'Please fill in all fields.';
+          return;
+        }
+        if (next !== confirmPw) {
+          err.textContent = 'New passwords do not match.';
+          return;
+        }
+        try {
+          const r = await fetch('/api/change_password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
+            body: JSON.stringify({ current, new: next, confirm: confirmPw })
+          });
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok || !j.ok) {
+            err.textContent = j.error || r.statusText || 'Failed to change password.';
+            showToast('Failed to change password', 'error');
+          } else {
+            closeModal();
+            showToast('Password updated', 'ok');
+          }
+        } catch (e) {
+          console.error(e);
+          err.textContent = 'Unexpected error.';
+        }
+      });
+
+      // Close modal when clicking the overlay
+      if (modal) {
+        modal.addEventListener('click', (ev) => {
+          if (ev.target === modal) closeModal();
+        });
+      }
+    })();
 
     document.getElementById('hddovr').addEventListener('input', ()=> setDirty('ovr', true));
     document.getElementById('ssdovr').addEventListener('input', ()=> setDirty('ovr', true));
@@ -290,15 +653,19 @@
       try {
         await fetch('/api/settings', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
           body: JSON.stringify({
             single_override_hdd_c: isNaN(h) ? undefined : h,
             single_override_ssd_c: isNaN(s) ? undefined : s
           })
         });
         setDirty('ovr', false);
+        showToast('Overrides saved', 'ok');
         refresh();
-      } catch (err) { console.error(err); }
+      } catch (err) {
+        showToast('Failed to save overrides', 'error');
+        console.error(err);
+      }
     });
 
     document.getElementById('savecurves').addEventListener('click', async () => {
@@ -313,16 +680,63 @@
       try {
         await fetch('/api/curves', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
           body: JSON.stringify({ hdd_thresholds: HTH2, hdd_pwm: HPW2, ssd_thresholds: STH2, ssd_pwm: SPW2 })
         });
         setDirty('curves', false);
+        showToast('Fan curves saved', 'ok');
         refresh();
-      } catch (err) { console.error(err); }
+      } catch (err) {
+        showToast('Failed to save fan curves', 'error');
+        console.error(err);
+      }
     });
 
     document.getElementById('discardbtn').addEventListener('click', ()=> { setDirty('ovr', false); refresh(); });
     document.getElementById('discardcurves').addEventListener('click', ()=> { setDirty('curves', false); refresh(); });
+
+    // ---- Reset to defaults (overrides + fan curves) ----
+    (function(){
+      const btn = document.getElementById('resetDefaults');
+      const modal = document.getElementById('resetModal');
+      const cancelBtn = document.getElementById('reset_cancel');
+      const confirmBtn = document.getElementById('reset_confirm');
+      const err = document.getElementById('reset_error');
+
+      if (!btn || !modal) return;
+
+      function openModal(){
+        if (err) err.textContent = '';
+        modal.style.display = 'flex';
+      }
+      function closeModal(){ modal.style.display = 'none'; }
+
+      btn.addEventListener('click', openModal);
+      if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
+      if (modal) modal.addEventListener('click', (ev)=>{ if (ev.target === modal) closeModal(); });
+
+      if (confirmBtn) confirmBtn.addEventListener('click', async ()=>{
+        if (err) err.textContent = '';
+        try {
+          const r = await fetch('/api/reset_defaults', { method: 'POST', headers: { 'X-CSRF-Token': CSRF } });
+          const j = await r.json().catch(()=>({}));
+          if (!r.ok || !j.ok) {
+            if (err) err.textContent = j.error || 'Failed to reset.';
+            showToast('Failed to reset defaults', 'error');
+            return;
+          }
+          setDirty('ovr', false);
+          setDirty('curves', false);
+          closeModal();
+          showToast('Restored defaults', 'ok');
+          refresh();
+        } catch (e) {
+          console.error(e);
+          if (err) err.textContent = 'Unexpected error while resetting.';
+          showToast('Failed to reset defaults', 'error');
+        }
+      });
+    })();
 
     // ---- Theme toggle (light/dark) ----
     const THEME_KEY = 'fanbridgeTheme';
@@ -347,5 +761,6 @@
       });
     })();
   </script>
+  <div id="toastHost" class="toast-container" aria-live="polite" aria-atomic="true"></div>
 </body>
 </html>

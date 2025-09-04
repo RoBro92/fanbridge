@@ -1,4 +1,4 @@
-poll_interval_seconds: 7
+poll_interval_seconds: 3
 hdd_thresholds:
 - 30
 - 32
@@ -16,7 +16,7 @@ hdd_pwm:
 - 50
 - 60
 - 80
-- 100
+- 99
 ssd_thresholds:
 - 35
 - 40
@@ -36,7 +36,7 @@ ssd_pwm:
 - 85
 - 100
 single_override_hdd_c: 45
-single_override_ssd_c: 62
+single_override_ssd_c: 65
 override_pwm: 100
 fallback_pwm: 10
 pwm_hysteresis: 3

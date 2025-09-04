@@ -1,5 +1,7 @@
-from flask import Flask, jsonify, request, render_template
+from flask import Flask, jsonify, request, render_template, session, redirect, url_for, make_response
 import os, time, yaml, json, configparser, glob, pathlib
+import secrets, hashlib, datetime
+from werkzeug.security import generate_password_hash, check_password_hash
 
 try:
     from dotenv import load_dotenv  
@@ -8,6 +10,29 @@ except Exception:
 
 _BASE = pathlib.Path(__file__).resolve().parent
 _PROJECT_ROOT = _BASE.parent 
+
+
+def _secret_path() -> pathlib.Path:
+    # persist a stable session secret across restarts
+    return (_BASE / "secret.key") if not _in_docker() else pathlib.Path("/config/secret.key")
+
+def _load_or_create_secret() -> str:
+    p = _secret_path()
+    try:
+        if p.exists():
+            return p.read_text().strip()
+        key = secrets.token_urlsafe(32)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(key)
+        return key
+    except Exception:
+        return secrets.token_urlsafe(32)
+
+def _in_docker() -> bool:
+    try:
+        return os.path.exists("/.dockerenv")
+    except Exception:
+        return False
 
 if load_dotenv:
     for _p in (
@@ -59,11 +84,9 @@ def _read_version_from_release() -> str | None:
 # Canonical version source: RELEASE.md only.
 # If not found, leave empty so UI shows "—".
 APP_VERSION = _read_version_from_release() or None
-# Local dev override: show "local" when explicitly requested via .env
-if os.environ.get("FANBRIDGE_FORCE_LOCAL_VERSION"):
-    APP_VERSION = "local"
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
+app.secret_key = _load_or_create_secret()
 if os.environ.get("TEMPLATES_AUTO_RELOAD") == "1" or os.environ.get("FLASK_DEBUG"):
     try:
         app.config["TEMPLATES_AUTO_RELOAD"] = True
@@ -72,11 +95,16 @@ if os.environ.get("TEMPLATES_AUTO_RELOAD") == "1" or os.environ.get("FLASK_DEBUG
         pass
 STARTED = time.time()
 
-# Paths
-CONFIG_PATH = os.environ.get("FANBRIDGE_CONFIG", "/config/config.yml")
-DISKS_INI = "/unraid/disks.ini"   # bind-mount to /var/local/emhttp/disks.ini on host
 
-# Defaults (UI can change via future /api/config)
+def _default_config_path() -> str:
+    # When not in Docker (e.g., running `python3 app.py`), prefer a local file
+    # so no special setup is required for development.
+    return "/config/config.yml" if _in_docker() else str(_BASE / "config.local.yml")
+
+CONFIG_PATH = os.environ.get("FANBRIDGE_CONFIG") or _default_config_path()
+DISKS_INI = "/unraid/disks.ini"   # bind-mount to /var/local/emhttp/disks.ini on host
+USERS_PATH = "/config/users.yml" if _in_docker() else str((_BASE / "users.local.yml"))
+
 DEFAULT_CONFIG = {
     "poll_interval_seconds": 7,     # UI refresh; clamped 3–60s
     "hdd_thresholds": [30,32,35,38,40,42,44,45],
@@ -89,12 +117,55 @@ DEFAULT_CONFIG = {
     "fallback_pwm": 10,
     "pwm_hysteresis": 3,
     "exclude_devices": [],
-    "idle_cutoff_hdd_c": 30,  # below this, HDD fan is 0%
-    "idle_cutoff_ssd_c": 35,  # below this, SSD fan is 0%
-    "sim": { "drives": [] },        # optional: for non‑Unraid local testing
+    "idle_cutoff_hdd_c": 30,  
+    "idle_cutoff_ssd_c": 35,  
+    "sim": { "drives": [] },        
 }
 
-# ---------- config helpers ----------
+def _load_users() -> dict:
+    try:
+        if not os.path.exists(USERS_PATH):
+            return {}
+        with open(USERS_PATH, "r") as f:
+            data = yaml.safe_load(f) or {}
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+def _save_users(users: dict) -> None:
+    try:
+        os.makedirs(os.path.dirname(USERS_PATH), exist_ok=True)
+    except Exception:
+        pass
+    with open(USERS_PATH, "w") as f:
+        yaml.safe_dump(users, f, sort_keys=False)
+
+_RATE = {}  # ip -> [timestamps]
+def _allow(ip: str, limit=20, window=60) -> bool:
+    now = time.time()
+    arr = _RATE.get(ip, [])
+    arr = [t for t in arr if now - t < window]
+    if len(arr) >= limit:
+        _RATE[ip] = arr
+        return False
+    arr.append(now)
+    _RATE[ip] = arr
+    return True
+
+def _ensure_csrf_token() -> str:
+    tok = session.get("csrf_token")
+    if not tok:
+        tok = secrets.token_urlsafe(32)
+        session["csrf_token"] = tok
+    return tok
+
+def _require_csrf() -> bool:
+    sent = request.headers.get("X-CSRF-Token", "")
+    good = session.get("csrf_token")
+    if not good or not secrets.compare_digest(sent, good):
+        return False
+    return True
+
 def _merge_defaults(user_cfg: dict, defaults: dict) -> dict:
     if not isinstance(user_cfg, dict):
         return defaults
@@ -197,14 +268,11 @@ def _nvme_temp_sysfs(dev: str) -> int | None:
     Try to grab NVMe temp from sysfs when disks.ini has '*' (unknown).
     We look for hwmon temp1_input attached to this nvme device.
     """
-    # nvme0n1 -> nvme0
     ctrl = dev.split("n", 1)[0]
-    # Typical paths: /sys/class/nvme/nvme0/device/hwmon/hwmonX/temp1_input
     candidates = glob.glob(f"/sys/class/nvme/{ctrl}/device/hwmon/hwmon*/temp*_input")
     for p in candidates:
         val = _read_file(p)
         if val and val.strip().isdigit():
-            # value is in millidegrees or degrees depending on platform; handle both
             n = int(val.strip())
             if n > 1000:
                 n = n // 1000
@@ -213,7 +281,6 @@ def _nvme_temp_sysfs(dev: str) -> int | None:
     return None
 
 def _is_hdd(dev_name: str) -> bool:
-    # NVMe → SSD, else use rotational when available, default HDD
     d = _unquote(dev_name)
     if d.startswith("nvme"):
         return False
@@ -241,13 +308,10 @@ def _read_disks_ini() -> list[dict]:
     excludes = set(cfg.get("exclude_devices") or [])
 
     for section in cp.sections():
-        # Accept any section that provides a device field (diskX, parity, cache, etc.)
         dev = _unquote(cp.get(section, "device", fallback=""))
         slot = _unquote(cp.get(section, "name", fallback=""))
         if not dev:
             continue
-
-        # temperature: blank or "NA" → None; clamp to 0–120C
         temp_raw = _unquote(cp.get(section, "temp", fallback=""))
         temp: int | None = None
         if temp_raw.isdigit():
@@ -255,12 +319,8 @@ def _read_disks_ini() -> list[dict]:
             if 0 <= t <= 120:
                 temp = t
 
-        # spundown = "1" means disk is sleeping
         spundown = _unquote(cp.get(section, "spundown", fallback="0")) == "1"
 
-        # Reconcile with sysfs hints conservatively:
-        # - If disks.ini says spun down (spundown==True), KEEP it (do not override to up).
-        # - If disks.ini says active (spundown==False) but sysfs clearly says suspended, flip to spun down.
         ss = _spin_state_from_sysfs(dev)
         if (spundown is False) and (ss is True):
             spundown = True
@@ -392,9 +452,85 @@ def add_no_cache(resp):
         resp.headers["Cache-Control"] = "no-store, max-age=0"
     return resp
 
+@app.before_request
+def _auth_and_rate():
+    p = request.path
+    # allow public endpoints
+    if p.startswith("/static/") or p in ("/login", "/health"):
+        return
+    # require login
+    if "user" not in session:
+        return redirect(url_for("login", next=request.path))
+    # rate limit
+    ip = request.headers.get("X-Forwarded-For", request.remote_addr or "")
+    if not _allow(ip):
+        return make_response(("Too Many Requests", 429))
+    # CSRF on modifying requests
+    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        if not _require_csrf():
+            return make_response(("Invalid CSRF token", 403))
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    users = _load_users()
+    first_run = not users or not users.get("users")
+
+    if request.method == "POST":
+        if first_run:
+            username = (request.form.get("username") or "").strip()
+            password = request.form.get("password") or ""
+            confirm  = request.form.get("confirm") or ""
+            if not username or not password or password != confirm:
+                return render_template("login.html", first_run=True, error="Please fill all fields; passwords must match.")
+            users = {"users": {username: generate_password_hash(password)}}
+            _save_users(users)
+            session["user"] = username
+            _ensure_csrf_token()
+            return redirect(url_for("index"))
+        else:
+            username = (request.form.get("username") or "").strip()
+            password = request.form.get("password") or ""
+            stored = (users.get("users") or {}).get(username)
+            if stored and check_password_hash(stored, password):
+                session["user"] = username
+                _ensure_csrf_token()
+                nxt = request.args.get("next") or url_for("index")
+                return redirect(nxt)
+            return render_template("login.html", first_run=False, error="Invalid username or password.")
+
+    # GET
+    return render_template("login.html", first_run=first_run, error=None)
+
+@app.route("/logout", methods=["POST", "GET"])
+def logout():
+    session.clear()
+    if request.method == "POST":
+        # JS caller expects a quick success without navigation
+        return ("", 204)
+    # For direct browser hits, send them to the login form
+    return redirect(url_for("login"))
+
+@app.get("/")
+def index():
+    try:
+        pi = int((cfg or {}).get("poll_interval_seconds", 7))
+    except Exception:
+        pi = 7
+    if pi < 3: pi = 3
+    if pi > 60: pi = 60
+
+    return render_template(
+        "index.html",
+        version=APP_VERSION,
+        poll_s=pi,
+        csrf_token=_ensure_csrf_token(),
+        username=session.get("user", ""),
+    )
+
 @app.get("/api/status")
 def status():
     return jsonify(compute_status())
+
 
 
 # --------- API: Exclude device ---------
@@ -416,26 +552,65 @@ def api_exclude():
     return jsonify({"ok": True, "exclude_devices": c["exclude_devices"]})
 
 
+# --------- API: Change password (authenticated) ---------
+@app.post("/api/change_password")
+def api_change_password():
+    # must be logged in due to @app.before_request
+    user = session.get("user")
+    if not user:
+        return jsonify({"ok": False, "error": "not authenticated"}), 401
+
+    data = request.get_json(force=True, silent=True) or {}
+    current = (data.get("current") or "").strip()
+    new = (data.get("new") or "").strip()
+    confirm = (data.get("confirm") or "").strip()
+
+    if not current or not new or not confirm:
+        return jsonify({"ok": False, "error": "all fields required"}), 400
+    if new != confirm:
+        return jsonify({"ok": False, "error": "passwords do not match"}), 400
+
+    users = _load_users()
+    stored = (users.get("users") or {}).get(user)
+    if not stored or not check_password_hash(stored, current):
+        return jsonify({"ok": False, "error": "current password is incorrect"}), 400
+
+    # update hash
+    users.setdefault("users", {})[user] = generate_password_hash(new)
+    _save_users(users)
+    return jsonify({"ok": True})
+
+
 # --------- API: Settings overrides ---------
 @app.post("/api/settings")
 def api_settings():
     data = request.get_json(force=True, silent=True) or {}
     c = load_config()
     changed = {}
-    def set_int(key, default):
+
+    def set_int(key, default, clamp: tuple[int,int] | None = None):
         v = data.get(key, None)
         if v is None:
             return
         try:
             iv = int(str(v).strip())
+            if clamp:
+                lo, hi = clamp
+                if iv < lo: iv = lo
+                if iv > hi: iv = hi
             c[key] = iv
             changed[key] = iv
         except Exception:
             pass
+
     set_int("single_override_hdd_c", c.get("single_override_hdd_c", 45))
     set_int("single_override_ssd_c", c.get("single_override_ssd_c", 60))
+    # New: allow changing the UI refresh interval (3–60s)
+    set_int("poll_interval_seconds", c.get("poll_interval_seconds", 7), clamp=(3, 60))
+
     save_config(c)
     return jsonify({"ok": True, "changed": changed})
+
 
 # --------- API: Curves and idle cutoffs ---------
 @app.post("/api/curves")
@@ -470,20 +645,56 @@ def api_curves():
     save_config(c)
     return jsonify({"ok": True, "changed": changed})
 
-@app.get("/")
-def index():
-    try:
-        pi = int((cfg or {}).get("poll_interval_seconds", 7))
-    except Exception:
-        pi = 7
-    if pi < 3: pi = 3
-    if pi > 60: pi = 60
 
-    return render_template(
-        "index.html",
-        version=APP_VERSION,
-        poll_s=pi,
-    )
+# --------- API: Reset to defaults (overrides + fan curves) ---------
+@app.post("/api/reset_defaults")
+def api_reset_defaults():
+    """
+    Reset editable configuration fields to DEFAULT_CONFIG:
+      - single_override_hdd_c
+      - single_override_ssd_c
+      - hdd_thresholds / hdd_pwm
+      - ssd_thresholds / ssd_pwm
+      - poll_interval_seconds (so UI pill matches defaults)
+    """
+    try:
+        c = load_config()
+        defaults = DEFAULT_CONFIG if 'DEFAULT_CONFIG' in globals() else {}
+
+        keys = [
+            "single_override_hdd_c",
+            "single_override_ssd_c",
+            "hdd_thresholds",
+            "hdd_pwm",
+            "ssd_thresholds",
+            "ssd_pwm",
+            "poll_interval_seconds",
+        ]
+        for k in keys:
+            if k in defaults:
+                c[k] = defaults[k]
+
+        save_config(c)
+        return jsonify({
+            "ok": True,
+            "single_override_hdd_c": c.get("single_override_hdd_c"),
+            "single_override_ssd_c": c.get("single_override_ssd_c"),
+            "hdd_thresholds": c.get("hdd_thresholds"),
+            "hdd_pwm": c.get("hdd_pwm"),
+            "ssd_thresholds": c.get("ssd_thresholds"),
+            "ssd_pwm": c.get("ssd_pwm"),
+            "poll_interval_seconds": c.get("poll_interval_seconds"),
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    APP_VERSION = "local"
+    app.secret_key = _load_or_create_secret()
+    try:
+        app.config["TEMPLATES_AUTO_RELOAD"] = True
+        app.jinja_env.auto_reload = True
+    except Exception:
+        pass
+    app.run(host="0.0.0.0", port=8080, debug=True)
