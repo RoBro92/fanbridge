@@ -1,5 +1,12 @@
 from flask import Flask, jsonify, request, render_template, session, redirect, url_for, make_response
 import os, time, yaml, json, configparser, glob, pathlib
+# Optional: pyserial for USB serial discovery (Arduino/RP2040)
+try:
+    import serial  # type: ignore
+    from serial.tools import list_ports  # type: ignore
+except Exception:
+    serial = None
+    list_ports = None
 import secrets, hashlib, datetime
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -218,6 +225,10 @@ def save_config(cfg: dict):
 
 cfg = load_config()
 
+# Serial preference and baud configurable via environment
+SERIAL_PREF = os.environ.get("FANBRIDGE_SERIAL_PORT", "").strip()
+SERIAL_BAUD = int(os.environ.get("FANBRIDGE_SERIAL_BAUD", "115200") or "115200")
+
 # ---------- Unraid disks.ini parsing ----------
 def _read_file(path: str) -> str | None:
     try:
@@ -347,6 +358,77 @@ def _read_disks_ini() -> list[dict]:
             "excluded": (dclean in excludes),
         })
     return drives
+
+# ---------- Serial helpers ----------
+def _unique_order(seq):
+    seen = set()
+    out = []
+    for x in seq:
+        if x and x not in seen:
+            out.append(x)
+            seen.add(x)
+    return out
+
+def list_serial_ports():
+    """Return an ordered, de-duplicated list of plausible serial devices inside the container."""
+    candidates = []
+    # Prefer stable udev by-id links if the host mapped them
+    candidates.extend(sorted(glob.glob("/dev/serial/by-id/*")))
+    # Common CDC ACM and USB serial nodes
+    candidates.extend(sorted(glob.glob("/dev/ttyACM*")))
+    candidates.extend(sorted(glob.glob("/dev/ttyUSB*")))
+    # pyserial discovery (best-effort)
+    if list_ports:
+        try:
+            for p in list_ports.comports():
+                if p.device:
+                    candidates.append(p.device)
+        except Exception:
+            pass
+    return _unique_order(candidates)
+
+def probe_serial_open(port: str, baud: int | None = None):
+    """Quick open/close to verify device access without committing to a protocol."""
+    if not port:
+        return False, "no port specified"
+    if serial is None:
+        return False, "pyserial not available"
+    try:
+        s = serial.Serial(port=port, baudrate=baud or SERIAL_BAUD, timeout=0.2)
+        try:
+            ok = True  # handshake can be added later
+        finally:
+            s.close()
+        return ok, "ok"
+    except Exception as e:
+        return False, str(e)
+
+def get_serial_status(full: bool = True):
+    """Build a status dict for /api/serial/status and embed in /api/status."""
+    ports = list_serial_ports()
+    preferred = SERIAL_PREF if SERIAL_PREF else (ports[0] if ports else "")
+    available = bool(ports)
+    connected = False
+    message = "no ports detected"
+
+    if preferred:
+        ok, msg = probe_serial_open(preferred, SERIAL_BAUD)
+        connected = ok
+        message = msg
+    elif available:
+        message = "ports detected but none selected"
+
+    data = {
+        "preferred": preferred,
+        "ports": ports if full else None,
+        "available": available,
+        "connected": connected,
+        "baud": SERIAL_BAUD,
+        "message": message,
+    }
+    if not full:
+        data.pop("ports", None)
+    return data
 
 # ---------- PWM logic ----------
 def map_temp_to_pwm(temp: int, thresholds: list[int], pwms: list[int]) -> int:
@@ -529,7 +611,25 @@ def index():
 
 @app.get("/api/status")
 def status():
-    return jsonify(compute_status())
+    data = compute_status()
+    try:
+        ss = get_serial_status(full=False)
+        data["serial"] = {
+            "preferred": ss.get("preferred"),
+            "available": ss.get("available"),
+            "connected": ss.get("connected"),
+            "baud": ss.get("baud"),
+            "message": ss.get("message"),
+        }
+    except Exception:
+        data["serial"] = {"available": False, "connected": False, "message": "error"}
+    return jsonify(data)
+
+
+# --------- API: Serial status ---------
+@app.get("/api/serial/status")
+def serial_status():
+    return jsonify(get_serial_status(full=True))
 
 
 

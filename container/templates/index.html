@@ -113,6 +113,7 @@
 
   <div class="meta flex">
     <span id="ver"   class="pill">version: {{ version or "—" }}</span>
+    <span id="serialpill" class="pill" title="USB serial connection to Arduino / RP2040">serial: …</span>
     <button id="pollbtn" class="pill clickable" type="button" title="Click to change the refresh interval (3–60 seconds)">refresh: …</button>
     <span id="mtime" class="pill">disks.ini: …</span>
     <span id="updated" class="pill" title="">updated: …</span>
@@ -266,12 +267,43 @@
   <script>
     let pollSeconds = parseInt(document.body.dataset.poll || '7', 10);
     let pollTimer = null;
+    let pollTimerSerial = null;
     function startPolling(){
-      if (pollTimer) { clearInterval(pollTimer); }
-      pollTimer = setInterval(refresh, Math.max(3, Math.min(60, pollSeconds)) * 1000);
+      if (pollTimer) clearInterval(pollTimer);
+      if (pollTimerSerial) clearInterval(pollTimerSerial);
+      const ms = Math.max(3, Math.min(60, pollSeconds))*1000;
+      pollTimer = setInterval(refresh, ms);
+      pollTimerSerial = setInterval(refreshSerial, ms);
       const pb = document.getElementById('pollbtn');
       if (pb) pb.textContent = `refresh: every ${Math.max(3, Math.min(60, pollSeconds))}s`;
       if (pb) pb.title = 'Click to change the refresh interval (3–60 seconds)';
+    }
+    // --- Serial status pill updater ---
+    async function refreshSerial(){
+      const el = document.getElementById('serialpill');
+      if (!el) return;
+      try {
+        const r = await fetch('/api/serial/status', { cache: 'no-store' });
+        const j = await r.json();
+        if (j.connected) {
+          el.textContent = 'serial: connected';
+          el.title = (j.preferred ? `Using ${j.preferred}` : (j.ports && j.ports[0] ? `Using ${j.ports[0]}` : 'connected'));
+          el.classList.remove('error','warn');
+        } else {
+          const hint = (j.ports && j.ports.length) ? 'not opened (permission?)' : 'not found';
+          el.textContent = 'serial: ' + hint;
+          el.title = (j.ports && j.ports.length)
+            ? `Found: ${j.ports.join(', ')}. Map the correct device in the Unraid template (Add another Path, Port, Variable, Label or Device ➜ Device).`
+            : 'No serial devices visible in container. Map /dev/ttyACM* or /dev/ttyUSB* via the template.';
+          el.classList.remove('error','warn');
+          el.classList.add('warn');
+        }
+      } catch (e) {
+        el.textContent = 'serial: error';
+        el.title = 'Failed to query /api/serial/status';
+        el.classList.remove('warn');
+        el.classList.add('error');
+      }
     }
     const fmt = (v) => (v === null || v === undefined) ? "—" : v;
     const CSRF = document.querySelector('meta[name="csrf-token"]').content;
@@ -512,6 +544,7 @@ function applyValidation(){
     }
 
     refresh();
+    refreshSerial();
     startPolling();
 
     // --- Themed Refresh Interval Modal ---
