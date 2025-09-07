@@ -587,7 +587,8 @@ def _preferred_serial_port() -> str:
         return SERIAL_PREF
     return ports[0] if ports else ""
 
-def _open_serial(port: str | None = None, baud: int | None = None) -> tuple[SerialProto | None, str | None]:
+# --- change this signature (around the _open_serial definition) ---
+def _open_serial(port: str | None = None, baud: int | None = None, timeout: float = 1.0) -> tuple[SerialProto | None, str | None]:
     # returns (ser, error_message_or_None)
     if serial is None:
         return None, "pyserial not available"
@@ -595,9 +596,8 @@ def _open_serial(port: str | None = None, baud: int | None = None) -> tuple[Seri
     if not p:
         return None, "no serial ports detected"
     try:
-        s = serial.Serial(port=p, baudrate=baud or SERIAL_BAUD, timeout=1)  # pyserial instance
+        s = serial.Serial(port=p, baudrate=baud or SERIAL_BAUD, timeout=timeout)  # <-- use passed timeout
         s_proto: SerialProto = s  # structural typing for Pylance
-        # small settle + clear any pending data
         try:
             s_proto.reset_input_buffer()
             s_proto.reset_output_buffer()
@@ -609,10 +609,11 @@ def _open_serial(port: str | None = None, baud: int | None = None) -> tuple[Seri
         log.warning("serial open failed | port=%s baud=%s err=%s", p, baud or SERIAL_BAUD, msg)
         return None, msg
 
-def _serial_send_line(line: str, expect_reply: bool = True) -> dict:
+# --- optionally, let _serial_send_line request a shorter timeout ---
+def _serial_send_line(line: str, expect_reply: bool = True, timeout: float = 1.0) -> dict:
     # writes a single line (adds '\n'), optionally reads one reply line
     out = {"ok": False, "port": None, "echo": line, "reply": None, "error": None}
-    s, err = _open_serial()
+    s, err = _open_serial(timeout=timeout)   # <-- pass timeout through
     if err:
         out["error"] = err
         return out
@@ -905,6 +906,31 @@ def status():
 @app.get("/api/serial/status")
 def serial_status():
     return jsonify(get_serial_status(full=True))
+
+# --- new quick tools endpoint; add below /api/serial/status ---
+@app.get("/api/serial/tools")
+def api_serial_tools():
+    # Always return fast: include status + an optional quick PING probe.
+    status = get_serial_status(full=True)
+    checks = {"ping": {"ok": False, "ms": None, "reply": None, "error": None}}
+    if status.get("connected"):
+        t0 = time.time()
+        # Short timeout so UI never hangs long
+        res = _serial_send_line("PING", expect_reply=True, timeout=0.5)
+        dt = int((time.time() - t0) * 1000)
+        if res.get("ok"):
+            checks["ping"] = {
+                "ok": (res.get("reply") == "PONG"),
+                "ms": dt,
+                "reply": res.get("reply"),
+                "error": None
+            }
+        else:
+            checks["ping"] = {"ok": False, "ms": dt, "reply": res.get("reply"), "error": res.get("error")}
+    else:
+        checks["ping"] = {"ok": False, "ms": None, "reply": None, "error": "not connected"}
+
+    return jsonify({"status": status, "checks": checks})
 
 
 # --------- API: Serial send a raw line ---------
