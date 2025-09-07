@@ -1,5 +1,6 @@
 from flask import Flask, jsonify, request, render_template, session, redirect, url_for, make_response, g
 import os, time, yaml, configparser, glob, pathlib, logging, sys, datetime, secrets
+from typing import Protocol, runtime_checkable
 
 try:
     import serial  # type: ignore
@@ -18,17 +19,26 @@ _BASE = pathlib.Path(__file__).resolve().parent
 _PROJECT_ROOT = _BASE.parent 
 
 
+@runtime_checkable
+class SerialProto(Protocol):
+    @property
+    def port(self) -> str | None: ...
+    # Minimal interface matching pyserial; common buffer-capable types
+    def write(self, b: bytes | bytearray | memoryview, /) -> int | None: ...
+    def flush(self) -> None: ...
+    def readline(self) -> bytes: ...
+    def close(self) -> None: ...
+    def reset_input_buffer(self) -> None: ...
+    def reset_output_buffer(self) -> None: ...
+
 def _secret_path() -> pathlib.Path:
     # persist a stable session secret across restarts
     return (_BASE / "secret.key") if not _in_docker() else pathlib.Path("/config/secret.key")
-
+    # Ensure gunicorn workers share a stable secret key.
+    # - If the file exists: read it
+    # - Else: atomically create then re-read
+    # Handles first-boot worker race with brief retries.
 def _load_or_create_secret() -> str:
-    """
-    Ensure all gunicorn workers share the SAME key:
-    - if file exists: read it
-    - else: atomically create then re-read
-    Handles first-boot worker race by retrying a couple of times.
-    """
     p = _secret_path()
     try:
         # fast path
@@ -64,6 +74,22 @@ def _in_docker() -> bool:
     except Exception:
         return False
 
+# Local-only default serial port for macOS RP2040 testing
+def _local_default_serial_port() -> str:
+    try:
+        # Prefer explicit RP2040 path if present (use call-out device on macOS)
+        path = "/dev/cu.usbmodem101"
+        if os.path.exists(path):
+            return path
+        # Fallback: first matching usbmodem device on macOS, prefer cu over tty
+        for patt in ("/dev/cu.usbmodem*", "/dev/tty.usbmodem*"):
+            matches = sorted(glob.glob(patt))
+            if matches:
+                return matches[0]
+    except Exception:
+        pass
+    return ""
+
 if load_dotenv:
     for _p in (
         _PROJECT_ROOT / ".env",
@@ -88,19 +114,23 @@ def _setup_logging():
         root.addHandler(handler)
     root.setLevel(level)
 
-    # Reduce noisy libraries
-    logging.getLogger("werkzeug").setLevel(logging.WARNING)
+    # Reduce noisy libraries; keep Flask startup line visible in debug
+    try:
+        if os.environ.get("FLASK_DEBUG"):
+            logging.getLogger("werkzeug").setLevel(logging.INFO)
+        else:
+            logging.getLogger("werkzeug").setLevel(logging.WARNING)
+    except Exception:
+        pass
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 _setup_logging()
 log = logging.getLogger("fanbridge")
 
 def _read_version_from_release() -> str | None:
-    """Read version from project RELEASE.md. Expected first matching line formats:
-    - "Version: X.Y.Z"
-    - Markdown header like "# vX.Y.Z" or "## 1.2.3" or "## [1.2.3]".
-    Returns the version string if found, else None.
-    """
+    # Extract version from RELEASE.md/CHANGELOG.md.
+    # Accepts formats: "Version: X.Y.Z", "# vX.Y.Z", "## 1.2.3", or "## [1.2.3]".
+    # Returns the version string if found, else None.
     import re
     # Search typical locations both in dev (repo layout) and in container
     # In container we copy RELEASE.md into the same folder as app.py (/app)
@@ -159,11 +189,9 @@ if os.environ.get("TEMPLATES_AUTO_RELOAD") == "1" or os.environ.get("FLASK_DEBUG
 STARTED = time.time()
 
 def _should_log_startup() -> bool:
-    """Log once across Flask's reloader and always in non-reloader contexts.
-
-    - If WERKZEUG_RUN_MAIN is unset (no reloader or production like gunicorn), log.
-    - If set, only log when it's the reloader child (== 'true').
-    """
+    # Log once across Flask's reloader and always in non-reloader contexts.
+    # - If WERKZEUG_RUN_MAIN is unset (no reloader/production), log.
+    # - If set, only log when it's the reloader child (== 'true').
     rm = os.environ.get("WERKZEUG_RUN_MAIN")
     return (rm is None) or (rm == "true")
 
@@ -180,15 +208,15 @@ CONFIG_PATH = os.environ.get("FANBRIDGE_CONFIG") or _default_config_path()
 DISKS_INI = "/unraid/disks.ini"   # bind-mount to /var/local/emhttp/disks.ini on host
 USERS_PATH = "/config/users.yml" if _in_docker() else str((_BASE / "users.local.yml"))
 
-# Serial preference and baud configurable via environment
-SERIAL_PREF = os.environ.get("FANBRIDGE_SERIAL_PORT", "").strip()
+# Serial preference and baud configurable via environment; default locally to RP2040
+SERIAL_PREF = os.environ.get("FANBRIDGE_SERIAL_PORT", "").strip() or ("" if _in_docker() else _local_default_serial_port())
 SERIAL_BAUD = int(os.environ.get("FANBRIDGE_SERIAL_BAUD", "115200") or "115200")
 
 try:
     if _should_log_startup():
         log.info(
             "paths | config=%s users=%s disks_ini=%s exists=%s serial_pref=%s baud=%s",
-            CONFIG_PATH, USERS_PATH, DISKS_INI, str(os.path.exists(DISKS_INI)).lower(), os.environ.get("FANBRIDGE_SERIAL_PORT", ""), SERIAL_BAUD
+            CONFIG_PATH, USERS_PATH, DISKS_INI, str(os.path.exists(DISKS_INI)).lower(), SERIAL_PREF, SERIAL_BAUD
         )
 except Exception:
     pass
@@ -330,12 +358,9 @@ def _sysfs(dev: str, rel: str) -> str | None:
     return _read_file(f"/sys/block/{d}/{rel}")
 
 def _spin_state_from_sysfs(dev: str) -> bool | None:
-    """
-    Returns False if clearly active, True if clearly spun down, or None if unknown.
-    We consult a couple of sysfs hints:
-      - device/state: often "running" for active devices
-      - power/runtime_status: "active" vs "suspended"
-    """
+    # Infer spin state from sysfs hints.
+    # Returns False if active, True if spun down, or None if unknown.
+    # Checks: device/state and power/runtime_status.
     st = _sysfs(dev, "device/state")
     if st:
         s = st.lower()
@@ -354,10 +379,8 @@ def _spin_state_from_sysfs(dev: str) -> bool | None:
     return None
 
 def _nvme_temp_sysfs(dev: str) -> int | None:
-    """
-    Try to grab NVMe temp from sysfs when disks.ini has '*' (unknown).
-    We look for hwmon temp1_input attached to this nvme device.
-    """
+    # Read NVMe temperature from sysfs when disks.ini reports unknown ('*').
+    # Looks for hwmon temp*_input attached to the NVMe controller.
     ctrl = dev.split("n", 1)[0]
     candidates = glob.glob(f"/sys/class/nvme/{ctrl}/device/hwmon/hwmon*/temp*_input")
     for p in candidates:
@@ -381,10 +404,8 @@ def _is_hdd(dev_name: str) -> bool:
 
 # ---------- Unraid disks.ini parsing ----------
 def _read_disks_ini() -> list[dict]:
-    """
-    Parse Unraid's /var/local/emhttp/disks.ini (bind-mounted to /unraid/disks.ini).
-    Returns list of drive dicts with dev, type, temp, state, excluded.
-    """
+    # Parse Unraid's /var/local/emhttp/disks.ini (bind-mounted to /unraid/disks.ini).
+    # Returns a list of drive dicts: dev, type, temp, state, excluded.
     if not os.path.exists(DISKS_INI):
         return []
 
@@ -395,7 +416,6 @@ def _read_disks_ini() -> list[dict]:
     except Exception as e:
         log.exception("Failed to parse %s: %s", DISKS_INI, e)
         return []
-    ...
 
     drives: list[dict] = []
     excludes = set(cfg.get("exclude_devices") or [])
@@ -451,8 +471,8 @@ def _unique_order(seq):
             seen.add(x)
     return out
 
+    # Ordered, de-duplicated serial device candidates inside the container.
 def list_serial_ports():
-    """Return an ordered, de-duplicated list of plausible serial devices inside the container."""
     candidates = []
     # Prefer stable udev by-id links if the host mapped them
     candidates.extend(sorted(glob.glob("/dev/serial/by-id/*")))
@@ -469,8 +489,8 @@ def list_serial_ports():
             pass
     return _unique_order(candidates)
 
+    # Quick open/close to verify device access without committing to a protocol.
 def probe_serial_open(port: str, baud: int | None = None):
-    """Quick open/close to verify device access without committing to a protocol."""
     if not port:
         return False, "no port specified"
     if serial is None:
@@ -484,6 +504,19 @@ def probe_serial_open(port: str, baud: int | None = None):
         return ok, "ok"
     except Exception as e:
         msg = str(e)
+        # macOS: if a tty device fails, retry the matching cu device
+        try:
+            if port.startswith("/dev/tty."):
+                cu_port = "/dev/cu." + port.split("/dev/tty.", 1)[1]
+                if os.path.exists(cu_port):
+                    s2 = serial.Serial(port=cu_port, baudrate=baud or SERIAL_BAUD, timeout=0.2)
+                    try:
+                        ok2 = True
+                    finally:
+                        s2.close()
+                    return ok2, f"ok ({cu_port})"
+        except Exception:
+            pass
         # Permission hints
         lower = msg.lower()
         if any(k in lower for k in ("permission", "denied", "operation not permitted")):
@@ -500,8 +533,8 @@ def probe_serial_open(port: str, baud: int | None = None):
             pass
         return False, msg
 
+    # Build serial status for /api/serial/status and embed in /api/status.
 def get_serial_status(full: bool = True):
-    """Build a status dict for /api/serial/status and embed in /api/status."""
     ports = list_serial_ports()
     preferred = SERIAL_PREF if SERIAL_PREF else (ports[0] if ports else "")
     available = bool(ports)
@@ -543,6 +576,84 @@ def get_serial_status(full: bool = True):
     except Exception:
         pass
     return data
+
+#
+# ---------- Serial send helpers used by API ----------
+#
+# get currently preferred port (same logic as get_serial_status)
+def _preferred_serial_port() -> str:
+    ports = list_serial_ports()
+    if SERIAL_PREF:
+        return SERIAL_PREF
+    return ports[0] if ports else ""
+
+def _open_serial(port: str | None = None, baud: int | None = None) -> tuple[SerialProto | None, str | None]:
+    # returns (ser, error_message_or_None)
+    if serial is None:
+        return None, "pyserial not available"
+    p = (port or _preferred_serial_port() or "").strip()
+    if not p:
+        return None, "no serial ports detected"
+    try:
+        s = serial.Serial(port=p, baudrate=baud or SERIAL_BAUD, timeout=1)  # pyserial instance
+        s_proto: SerialProto = s  # structural typing for Pylance
+        # small settle + clear any pending data
+        try:
+            s_proto.reset_input_buffer()
+            s_proto.reset_output_buffer()
+        except Exception:
+            pass
+        return s_proto, None
+    except Exception as e:
+        msg = str(e)
+        log.warning("serial open failed | port=%s baud=%s err=%s", p, baud or SERIAL_BAUD, msg)
+        return None, msg
+
+def _serial_send_line(line: str, expect_reply: bool = True) -> dict:
+    # writes a single line (adds '\n'), optionally reads one reply line
+    out = {"ok": False, "port": None, "echo": line, "reply": None, "error": None}
+    s, err = _open_serial()
+    if err:
+        out["error"] = err
+        return out
+    if s is None:
+        out["error"] = "serial not available"
+        return out
+    out["port"] = (s.port if hasattr(s, "port") else None)
+    try:
+        payload = (line or "").strip() + "\n"
+        data = payload.encode("utf-8", errors="ignore")
+        s.write(data)
+        s.flush()
+        if expect_reply:
+            resp = s.readline().decode("utf-8", errors="ignore").strip()
+            out["reply"] = resp if resp else None
+        out["ok"] = True
+        return out
+    except Exception as e:
+        out["error"] = str(e)
+        return out
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+
+from typing import Any
+
+def _serial_set_pwm_byte(value: Any) -> dict:
+    # clamps 0..255 and sends "SET PWM <n>"
+    if not isinstance(value, (int, float, str)):
+        return {"ok": False, "error": "invalid value"}
+    try:
+        v = int(value)
+    except Exception:
+        return {"ok": False, "error": "invalid value"}
+    if v < 0: v = 0
+    if v > 255: v = 255
+    res = _serial_send_line(f"SET PWM {v}", expect_reply=True)
+    res["value"] = v
+    return res
 
 # ---------- PWM logic ----------
 def map_temp_to_pwm(temp: int, thresholds: list[int], pwms: list[int]) -> int:
@@ -796,6 +907,39 @@ def serial_status():
     return jsonify(get_serial_status(full=True))
 
 
+# --------- API: Serial send a raw line ---------
+@app.post("/api/serial/send")
+def api_serial_send():
+    data = request.get_json(force=True, silent=True) or {}
+    line = (data.get("line") or "").strip()
+    if not line:
+        return jsonify({"ok": False, "error": "missing line"}), 400
+
+    res = _serial_send_line(line, expect_reply=True)
+    # log succinctly
+    if res.get("ok"):
+        log.info("serial send | port=%s echo=%r reply=%r", res.get("port"), line, res.get("reply"))
+    else:
+        log.warning("serial send failed | echo=%r err=%s", line, res.get("error") or "unknown")
+    code = 200 if res.get("ok") else 503
+    return jsonify(res), code
+
+
+# --------- API: Serial set PWM (0..255 raw duty) ---------
+@app.post("/api/serial/pwm")
+def api_serial_pwm():
+    data = request.get_json(force=True, silent=True) or {}
+    if "value" not in data:
+        return jsonify({"ok": False, "error": "missing value"}), 400
+    res = _serial_set_pwm_byte(data.get("value"))
+    if res.get("ok"):
+        log.info("serial pwm | port=%s value=%s reply=%r", res.get("port"), res.get("value"), res.get("reply"))
+    else:
+        log.warning("serial pwm failed | value=%s err=%s", data.get("value"), res.get("error") or "unknown")
+    code = 200 if res.get("ok") else 503
+    return jsonify(res), code
+
+
 
 # --------- API: Exclude device ---------
 @app.post("/api/exclude")
@@ -913,14 +1057,11 @@ def api_curves():
 # --------- API: Reset to defaults (overrides + fan curves) ---------
 @app.post("/api/reset_defaults")
 def api_reset_defaults():
-    """
-    Reset editable configuration fields to DEFAULT_CONFIG:
-      - single_override_hdd_c
-      - single_override_ssd_c
-      - hdd_thresholds / hdd_pwm
-      - ssd_thresholds / ssd_pwm
-      - poll_interval_seconds (so UI pill matches defaults)
-    """
+    # Reset configurable fields to DEFAULT_CONFIG:
+    # - single_override_hdd_c / single_override_ssd_c
+    # - hdd_thresholds / hdd_pwm
+    # - ssd_thresholds / ssd_pwm
+    # - poll_interval_seconds (UI refresh default)
     try:
         c = load_config()
         defaults = DEFAULT_CONFIG if 'DEFAULT_CONFIG' in globals() else {}
@@ -961,4 +1102,18 @@ if __name__ == "__main__":
         app.jinja_env.auto_reload = True
     except Exception:
         pass
-    app.run(host="0.0.0.0", port=8080, debug=True)
+    # Local dev conveniences: show URL and optionally open browser
+    host = "0.0.0.0"
+    port = 8080
+    url = f"http://127.0.0.1:{port}"
+    try:
+        log.info("Serving locally | url=%s host=%s port=%s", url, host, port)
+    except Exception:
+        pass
+    try:
+        if os.environ.get("FANBRIDGE_OPEN_BROWSER", "1") == "1":
+            import threading, webbrowser
+            threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+    except Exception:
+        pass
+    app.run(host=host, port=port, debug=True)

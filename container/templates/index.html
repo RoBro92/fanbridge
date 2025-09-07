@@ -7,6 +7,32 @@
   <title>FanBridge</title>
   <!-- FanBridge UI: status, configuration, and modals; minimal client-side JS for polling -->
   <style>
+    /* Tabs (distinct from info pills) */
+    .tabs {
+      display:flex; gap:4px; margin:12px 0; flex-wrap:wrap; max-width: 905px;
+      border-bottom: 1px solid var(--border);
+    }
+    .tab {
+      appearance: none;
+      border: none;
+      background: transparent;
+      color: var(--fg);
+      padding: 8px 12px;
+      margin: 0;
+      border-bottom: 3px solid transparent;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      border-radius: 0; /* ensure these are not 'pills' */
+    }
+    .tab:hover {
+      background: var(--pillbg);
+    }
+    :root { --accent:#ff7a1a; }
+    body.dark { --accent:#ffb26b; }
+    .tab--active {
+      border-bottom-color: var(--accent);
+    }
     /* Theme variables */
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }
     :root { --bg:#ffffff; --fg:#111827; --muted:#6b7280; --border:#e5e7eb; --thbg:#f6f8fa; --pillbg:#fafafa; --cardbg:#ffffff; }
@@ -60,6 +86,20 @@
     .toast.error { border-color:#ef4444; background:#fef2f2; color:#991b1b; }
 
     .panel { border:1px solid var(--border); border-radius:8px; padding:12px; background: var(--cardbg); max-width: 880px; margin-top:16px; }
+    /* Serial tools layout */
+    .serial-grid { display:grid; grid-template-columns: minmax(260px, 360px) 1fr; gap:14px; align-items:flex-start; }
+    @media (max-width: 880px){ .serial-grid { grid-template-columns: 1fr; } }
+    .serial-box { border:1px solid var(--border); border-radius:8px; background: var(--cardbg); padding:10px; }
+    .serial-box h3 { margin:0 0 8px; font-size:14px; }
+    .serial-console { height: 220px; overflow:auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; background: var(--pillbg); border:1px dashed var(--border); border-radius:8px; padding:8px; white-space: pre-wrap; }
+    .serial-console .ts { opacity:.6; }
+    .serial-console .in  { color:#2563eb; }
+    .serial-console .out { color:#16a34a; }
+    .serial-console .err { color:#dc2626; }
+    .serial-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .serial-row input[type="text"] { flex:1 1 220px; padding:6px 8px; }
+    .serial-slider { display:flex; align-items:center; gap:10px; }
+    .serial-slider input[type="range"]{ width: 220px; }
     .panel h2 { margin:0 0 8px; font-size:16px; }
     .chk { display:inline-flex; align-items:center; gap:6px; margin:6px 12px 6px 0; }
     .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:6px 12px; }
@@ -147,8 +187,15 @@
     </div>
   </div>
 
+  <div class="tabs">
+    <button class="tab tab--active" data-tab="main" id="tab-main">Drives &amp; Config</button>
+    <button class="tab" data-tab="serial" id="tab-serial">Serial</button>
+    <button class="tab" data-tab="logs" id="tab-logs">Logs</button>
+  </div>
+
   <div id="statusBanner" class="banner warn"></div>
 
+  <div id="panel-main">
   <table id="tbl">
     <thead>
       <tr>
@@ -248,6 +295,56 @@
   <div class="footer small muted">
     <a href="/api/status">API</a> &nbsp;|&nbsp; <a href="/health">Health</a>
   </div>
+</div> <!-- /#panel-main -->
+
+<div id="panel-serial" style="display:none;">
+  <div class="panel">
+    <h2 style="margin:0 0 10px; display:flex; align-items:center; gap:10px;">
+      Serial tools
+      <span id="serialStatus" class="pill small" title="USB serial connection status">checking…</span>
+    </h2>
+
+    <div class="serial-grid">
+      <!-- Left: quick actions -->
+      <div class="serial-box">
+        <h3>Quick commands</h3>
+        <div class="serial-row" style="margin-bottom:8px;">
+          <button id="btnPing">PING</button>
+          <button id="btnTest">TEST</button>
+          <button id="btnVer">VERSION?</button>
+          <button id="btnStat">STATUS?</button>
+        </div>
+
+        <h3 style="margin-top:12px;">Send raw line</h3>
+        <div class="serial-row">
+          <input type="text" id="serialLine" placeholder="Type a command e.g. SET PWM 64" />
+          <button id="btnSendLine">Send</button>
+        </div>
+
+        <h3 style="margin-top:12px;">PWM test</h3>
+        <div class="serial-slider">
+          <input type="range" id="pwmRange" min="0" max="255" value="0" />
+          <span class="small muted">value: <strong id="pwmVal">0</strong>/255</span>
+          <button id="btnPwmSend">Apply</button>
+          <button id="btnPwmZero">Zero</button>
+        </div>
+      </div>
+
+      <!-- Right: console output -->
+      <div class="serial-box">
+        <h3>Console</h3>
+        <div id="serialConsole" class="serial-console" aria-live="polite" aria-atomic="false"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="panel-logs" style="display:none;">
+  <div class="panel">
+    <h2>Logs</h2>
+    <p class="small muted">Live logs viewer coming next.</p>
+  </div>
+</div>
 
   <!-- Modal: Change Password -->
   <div id="pwModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); align-items:center; justify-content:center; z-index:1000;">
@@ -291,6 +388,26 @@
 
   <script>
     let pollSeconds = parseInt(document.body.dataset.poll || '7', 10);
+    // tabs: minimal show/hide
+    const panels = {
+      main: document.getElementById('panel-main'),
+      serial: document.getElementById('panel-serial'),
+      logs: document.getElementById('panel-logs'),
+    };
+    function showTab(name){
+      Object.keys(panels).forEach(k=>{
+        if (panels[k]) panels[k].style.display = (k===name) ? '' : 'none';
+        const btn = document.getElementById('tab-'+k);
+        if (btn) btn.classList.toggle('tab--active', k===name);
+      });
+      try { localStorage.setItem('fanbridgeTab', name); } catch(e){}
+    }
+    document.querySelectorAll('.tabs .tab[data-tab]').forEach(b=>{
+      b.addEventListener('click', ()=> showTab(b.dataset.tab));
+    });
+    showTab((()=>{
+      try { return localStorage.getItem('fanbridgeTab') || 'main'; } catch(e) { return 'main'; }
+    })());
     let pollTimer = null;
     let pollTimerSerial = null;
     function startPolling(){
@@ -882,6 +999,103 @@ function applyValidation(){
       const mTheme = document.getElementById('menuTheme');
       if (mTheme) mTheme.textContent = 'Theme: ' + (pref === 'dark' ? 'Dark' : 'Light');
     })();
+  </script>
+  <script>
+  // ---- Serial helpers (UI -> API) ----
+  function serialTs(){ const d=new Date(); return d.toLocaleTimeString(); }
+  function scAppend(type, text){
+    const host = document.getElementById('serialConsole');
+    if (!host) return;
+    const line = document.createElement('div');
+    line.innerHTML = `<span class="ts">[${serialTs()}]</span> <span class="${type}">${text.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</span>`;
+    host.appendChild(line);
+    host.scrollTop = host.scrollHeight;
+  }
+
+  async function apiSerialSend(line){
+    try {
+      const r = await fetch('/api/serial/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
+        body: JSON.stringify({ line: String(line||'') })
+      });
+      const j = await r.json().catch(()=>({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || r.statusText || 'send failed');
+      if (j.echo) scAppend('in',  j.echo);
+      if (j.reply) scAppend('out', j.reply);
+      showToast('Command sent', 'ok');
+    } catch(e){ scAppend('err', 'SEND ERROR: '+e.message); showToast('Serial send failed', 'error'); }
+  }
+
+  async function apiSerialPwm(val){
+    try {
+      const r = await fetch('/api/serial/pwm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
+        body: JSON.stringify({ value: Number(val)||0 })
+      });
+      const j = await r.json().catch(()=>({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || r.statusText || 'pwm failed');
+      if (j.echo) scAppend('in',  j.echo);
+      if (j.reply) scAppend('out', j.reply);
+      showToast('PWM updated', 'ok');
+    } catch(e){ scAppend('err', 'PWM ERROR: '+e.message); showToast('PWM update failed', 'error'); }
+  }
+
+  // Wire up Serial tab controls once DOM is ready
+  (function(){
+    const btnPing = document.getElementById('btnPing');
+    const btnTest = document.getElementById('btnTest');
+    const btnVer  = document.getElementById('btnVer');
+    const btnStat = document.getElementById('btnStat');
+    const btnSend = document.getElementById('btnSendLine');
+    const inputLn = document.getElementById('serialLine');
+    const rng     = document.getElementById('pwmRange');
+    const lbl     = document.getElementById('pwmVal');
+    const btnPwm  = document.getElementById('btnPwmSend');
+    const btnZero = document.getElementById('btnPwmZero');
+    const pill    = document.getElementById('serialStatus');
+
+    if (rng && lbl){
+      const upd=()=>{ lbl.textContent= String(rng.value); };
+      rng.addEventListener('input', upd); upd();
+    }
+
+    if (btnPing) btnPing.addEventListener('click', ()=> apiSerialSend('PING'));
+    if (btnTest) btnTest.addEventListener('click', ()=> apiSerialSend('TEST'));
+    if (btnVer)  btnVer .addEventListener('click', ()=> apiSerialSend('VERSION?'));
+    if (btnStat) btnStat.addEventListener('click', ()=> apiSerialSend('STATUS?'));
+
+    if (btnSend) btnSend.addEventListener('click', ()=>{
+      const v = (inputLn && inputLn.value) ? inputLn.value.trim() : '';
+      if (!v) return;
+      apiSerialSend(v);
+    });
+    if (inputLn) inputLn.addEventListener('keydown', (e)=>{
+      if (e.key==='Enter') { e.preventDefault(); const v=inputLn.value.trim(); if (v) apiSerialSend(v); }
+    });
+
+    if (btnPwm && rng) btnPwm.addEventListener('click', ()=> apiSerialPwm(rng.value));
+    if (btnZero){
+      btnZero.addEventListener('click', ()=>{ if (rng){ rng.value=0; lbl && (lbl.textContent='0'); } apiSerialPwm(0); });
+    }
+
+    // Keep the Serial tab header pill in sync with global refreshSerial()
+    const _oldRefreshSerial = refreshSerial;
+    refreshSerial = async function(){
+      try {
+        const r = await fetch('/api/serial/status', { cache: 'no-store' });
+        const j = await r.json();
+        if (j.connected) {
+          if (pill){ pill.textContent = 'connected'; pill.classList.remove('warn','error'); pill.title = j.preferred || (j.ports&&j.ports[0]) || 'connected'; }
+        } else {
+          if (pill){ pill.textContent = (j.ports&&j.ports.length)?'not opened':'not found'; pill.classList.add('warn'); pill.title = (j.ports||[]).join(', '); }
+        }
+      } catch(e){ if (pill){ pill.textContent='error'; pill.classList.add('error'); pill.title='status error'; } }
+      // Also call original logic for the top header pill
+      try { if (typeof _oldRefreshSerial === 'function') await _oldRefreshSerial(); } catch(_){}
+    }
+  })();
   </script>
   <div id="toastHost" class="toast-container" aria-live="polite" aria-atomic="true"></div>
 </body>
