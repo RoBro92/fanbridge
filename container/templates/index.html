@@ -5,7 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="csrf-token" content="{{ csrf_token }}">
   <title>FanBridge</title>
+  <!-- FanBridge UI: status, configuration, and modals; minimal client-side JS for polling -->
   <style>
+    /* Theme variables */
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }
     :root { --bg:#ffffff; --fg:#111827; --muted:#6b7280; --border:#e5e7eb; --thbg:#f6f8fa; --pillbg:#fafafa; --cardbg:#ffffff; }
     body.dark { --bg:#0f172a; --fg:#e5e7eb; --muted:#94a3b8; --border:#334155; --thbg:#111827; --pillbg:#1f2937; --cardbg:#0b1220; }
@@ -23,12 +25,12 @@
     table { border-collapse: collapse; width: 100%; max-width: 905px; }
     th, td { border: 1px solid; padding: 8px 10px; text-align: left; }
 
+    /* State colours */
     .ok   { color: #0a7;   font-weight: 600; }
     .warn { color: #d97706; font-weight: 600; }
     .crit { color: #d32;   font-weight: 700; }
 
     .flex { display:flex; gap:12px; align-items:center; flex-wrap: wrap; }
-    /* attention pills share identical emphasis */
     .pill.warn, .pill.error { 
       font-weight: 700;
       border-width: 2px;
@@ -45,7 +47,7 @@
     .footer { margin-top: 16px; }
     code { background:#f6f8fa; padding:2px 6px; border-radius:4px; }
 
-    /* Status banner & toast */
+    /* Banners and toasts */
     .banner { display:none; border:1px solid var(--border); border-radius:8px; padding:10px 12px; margin:12px 0; background: var(--pillbg); }
     .banner.warn  { border-color:#f59e0b; background:#fff7ed; color:#92400e; }
     .banner.error { border-color:#ef4444; background:#fef2f2; color:#991b1b; }
@@ -64,7 +66,7 @@
     .inputs { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
     input[type="number"] { width: 72px; padding:4px 6px; }
 
-    /* Centre + tighten specific columns */
+    /* Table column widths */
     th.type,  td.type  { text-align: center; width: 90px; }
     th.state, td.state { text-align: center; width: 90px; }
     th.temp,  td.temp  { text-align: center; width: 110px; }
@@ -76,7 +78,7 @@
     .grid#curveH_th input, .grid#curveH_pw input, .grid#curveS_th input, .grid#curveS_pw input { width: 64px; }
     .rowlabel { min-width: 110px; }
 
-    /* Form controls follow theme */
+    /* Form controls */
     input, select {
       background: var(--cardbg);
       color: var(--fg);
@@ -86,7 +88,7 @@
     input[type="password"] { width: 100%; padding:6px 8px; }
     body.dark input, body.dark select { color-scheme: dark; }
 
-    /* Improve visibility of number input arrows in dark mode (WebKit/Blink) */
+    /* Dark mode number inputs */
     body.dark input[type="number"]::-webkit-outer-spin-button,
     body.dark input[type="number"]::-webkit-inner-spin-button {
       opacity: 1 !important;
@@ -183,7 +185,7 @@
   </div>
 </div>
 
-  <!-- Refresh Interval Modal -->
+  <!-- Modal: Refresh Interval -->
   <div id="pollModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); align-items:center; justify-content:center; z-index:1000;">
     <div style="background: var(--cardbg); color: var(--fg); border:1px solid var(--border); border-radius:10px; padding:16px; width: min(420px, 92vw); box-shadow: 0 10px 30px rgba(0,0,0,.3);">
       <h3 style="margin:0 0 10px;">Set refresh interval</h3>
@@ -247,7 +249,7 @@
     <a href="/api/status">API</a> &nbsp;|&nbsp; <a href="/health">Health</a>
   </div>
 
-  <!-- Change Password Modal -->
+  <!-- Modal: Change Password -->
   <div id="pwModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); align-items:center; justify-content:center; z-index:1000;">
     <div style="background: var(--cardbg); color: var(--fg); border:1px solid var(--border); border-radius:10px; padding:16px; width: min(420px, 92vw); box-shadow: 0 10px 30px rgba(0,0,0,.3);">
       <h3 style="margin:0 0 10px;">Change password</h3>
@@ -270,7 +272,7 @@
     </div>
   </div>
 
-  <!-- Reset to Defaults Modal -->
+  <!-- Modal: Reset to Defaults -->
   <div id="resetModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); align-items:center; justify-content:center; z-index:1000;">
     <div style="background: var(--cardbg); color: var(--fg); border:1px solid var(--border); border-radius:10px; padding:16px; width: min(420px, 92vw); box-shadow: 0 10px 30px rgba(0,0,0,.3);">
       <h3 style="margin:0 0 10px;">Reset to defaults</h3>
@@ -301,7 +303,7 @@
       if (pb) pb.textContent = `refresh: every ${Math.max(3, Math.min(60, pollSeconds))}s`;
       if (pb) pb.title = 'Click to change the refresh interval (3–60 seconds)';
     }
-    // --- Serial status pill updater ---
+    // Serial status updater
     async function refreshSerial(){
       const el = document.getElementById('serialpill');
       if (!el) return;
@@ -331,7 +333,7 @@
     const fmt = (v) => (v === null || v === undefined) ? "—" : v;
     const CSRF = document.querySelector('meta[name="csrf-token"]').content;
 
-    // --- Status & errors surfacing ---
+    // Status formatting helpers
     function formatAge(ms){
       if (ms <= 0 || isNaN(ms)) return 'n/a';
       const s = Math.floor(ms/1000);
@@ -816,7 +818,7 @@ function applyValidation(){
     document.getElementById('discardbtn').addEventListener('click', ()=> { setDirty('ovr', false); refresh(); });
     document.getElementById('discardcurves').addEventListener('click', ()=> { setDirty('curves', false); refresh(); });
 
-    // ---- Reset to defaults (overrides + fan curves) ----
+    // Reset to defaults (overrides + fan curves)
     (function(){
       const btn = document.getElementById('resetDefaults');
       const modal = document.getElementById('resetModal');
@@ -859,7 +861,7 @@ function applyValidation(){
       });
     })();
 
-    // ---- Theme toggle (light/dark) ----
+    // Theme toggle (light/dark)
     const THEME_KEY = 'fanbridgeTheme';
     function applyTheme(t){
       const dark = (t === 'dark');

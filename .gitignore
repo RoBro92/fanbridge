@@ -14,5 +14,7 @@ __pycache__/
 dev-appdata/
 container/.env
 container/config.local.yml
+container/secret.key
+container/users.local.yml
 docker-compose.override.yml
 .env

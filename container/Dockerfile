@@ -1,3 +1,4 @@
+## FanBridge runtime image
 FROM python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -14,6 +15,7 @@ LABEL org.opencontainers.image.title="fanbridge" \
 COPY container/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 COPY container/ /app/
+# Include version/changelog for runtime version display
 COPY RELEASE.md /app/RELEASE.md
 
 ENV PYTHONUNBUFFERED=1
