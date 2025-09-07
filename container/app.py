@@ -23,8 +23,12 @@ def _secret_path() -> pathlib.Path:
     return (_BASE / "secret.key") if not _in_docker() else pathlib.Path("/config/secret.key")
 
 def _load_or_create_secret() -> str:
-    # Generate or load a persistent Flask secret key shared by all workers.
-    # Creates atomically if missing; retries read to avoid race on first boot.
+    """
+    Ensure all gunicorn workers share the SAME key:
+    - if file exists: read it
+    - else: atomically create then re-read
+    Handles first-boot worker race by retrying a couple of times.
+    """
     p = _secret_path()
     try:
         # fast path
@@ -92,7 +96,11 @@ _setup_logging()
 log = logging.getLogger("fanbridge")
 
 def _read_version_from_release() -> str | None:
-    # Extract version from RELEASE.md (supports "Version: X.Y.Z" and header formats).
+    """Read version from project RELEASE.md. Expected first matching line formats:
+    - "Version: X.Y.Z"
+    - Markdown header like "# vX.Y.Z" or "## 1.2.3" or "## [1.2.3]".
+    Returns the version string if found, else None.
+    """
     import re
     # Search typical locations both in dev (repo layout) and in container
     # In container we copy RELEASE.md into the same folder as app.py (/app)
@@ -151,7 +159,11 @@ if os.environ.get("TEMPLATES_AUTO_RELOAD") == "1" or os.environ.get("FLASK_DEBUG
 STARTED = time.time()
 
 def _should_log_startup() -> bool:
-    # Log once with Flask reloader: only in the child process; always in production.
+    """Log once across Flask's reloader and always in non-reloader contexts.
+
+    - If WERKZEUG_RUN_MAIN is unset (no reloader or production like gunicorn), log.
+    - If set, only log when it's the reloader child (== 'true').
+    """
     rm = os.environ.get("WERKZEUG_RUN_MAIN")
     return (rm is None) or (rm == "true")
 
@@ -318,7 +330,12 @@ def _sysfs(dev: str, rel: str) -> str | None:
     return _read_file(f"/sys/block/{d}/{rel}")
 
 def _spin_state_from_sysfs(dev: str) -> bool | None:
-    # Infer spin state from sysfs hints: device/state and power/runtime_status.
+    """
+    Returns False if clearly active, True if clearly spun down, or None if unknown.
+    We consult a couple of sysfs hints:
+      - device/state: often "running" for active devices
+      - power/runtime_status: "active" vs "suspended"
+    """
     st = _sysfs(dev, "device/state")
     if st:
         s = st.lower()
@@ -337,7 +354,10 @@ def _spin_state_from_sysfs(dev: str) -> bool | None:
     return None
 
 def _nvme_temp_sysfs(dev: str) -> int | None:
-    # Read NVMe temperature via hwmon when disks.ini lacks a value.
+    """
+    Try to grab NVMe temp from sysfs when disks.ini has '*' (unknown).
+    We look for hwmon temp1_input attached to this nvme device.
+    """
     ctrl = dev.split("n", 1)[0]
     candidates = glob.glob(f"/sys/class/nvme/{ctrl}/device/hwmon/hwmon*/temp*_input")
     for p in candidates:
@@ -356,12 +376,15 @@ def _is_hdd(dev_name: str) -> bool:
         return False
     rot = _read_file(f"/sys/block/{d}/queue/rotational")
     if rot is not None:
-        return rot.strip() == "1"
+        return rot.strip() == "1"   
     return True
 
 # ---------- Unraid disks.ini parsing ----------
 def _read_disks_ini() -> list[dict]:
-    # Parse Unraid's disks.ini (bind-mounted at /unraid/disks.ini) → list of drive dicts.
+    """
+    Parse Unraid's /var/local/emhttp/disks.ini (bind-mounted to /unraid/disks.ini).
+    Returns list of drive dicts with dev, type, temp, state, excluded.
+    """
     if not os.path.exists(DISKS_INI):
         return []
 
@@ -372,7 +395,7 @@ def _read_disks_ini() -> list[dict]:
     except Exception as e:
         log.exception("Failed to parse %s: %s", DISKS_INI, e)
         return []
-    # parsed successfully; iterate sections to build drive list
+    ...
 
     drives: list[dict] = []
     excludes = set(cfg.get("exclude_devices") or [])
@@ -429,7 +452,7 @@ def _unique_order(seq):
     return out
 
 def list_serial_ports():
-    # Return a de-duplicated list of likely serial device paths inside the container.
+    """Return an ordered, de-duplicated list of plausible serial devices inside the container."""
     candidates = []
     # Prefer stable udev by-id links if the host mapped them
     candidates.extend(sorted(glob.glob("/dev/serial/by-id/*")))
@@ -447,7 +470,7 @@ def list_serial_ports():
     return _unique_order(candidates)
 
 def probe_serial_open(port: str, baud: int | None = None):
-    # Quick open/close to verify device access without committing to a protocol.
+    """Quick open/close to verify device access without committing to a protocol."""
     if not port:
         return False, "no port specified"
     if serial is None:
@@ -478,7 +501,7 @@ def probe_serial_open(port: str, baud: int | None = None):
         return False, msg
 
 def get_serial_status(full: bool = True):
-    # Build a status dict for serial: preferred, availability, connection, and message.
+    """Build a status dict for /api/serial/status and embed in /api/status."""
     ports = list_serial_ports()
     preferred = SERIAL_PREF if SERIAL_PREF else (ports[0] if ports else "")
     available = bool(ports)
@@ -890,7 +913,14 @@ def api_curves():
 # --------- API: Reset to defaults (overrides + fan curves) ---------
 @app.post("/api/reset_defaults")
 def api_reset_defaults():
-    # Reset editable fields back to DEFAULT_CONFIG (overrides, curves, poll interval).
+    """
+    Reset editable configuration fields to DEFAULT_CONFIG:
+      - single_override_hdd_c
+      - single_override_ssd_c
+      - hdd_thresholds / hdd_pwm
+      - ssd_thresholds / ssd_pwm
+      - poll_interval_seconds (so UI pill matches defaults)
+    """
     try:
         c = load_config()
         defaults = DEFAULT_CONFIG if 'DEFAULT_CONFIG' in globals() else {}
