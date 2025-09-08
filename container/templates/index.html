@@ -63,6 +63,7 @@
     }
     .pill.warn  { border-color:#f59e0b; background:#fff7ed; color:#92400e; }
     .pill.error { border-color:#ef4444; background:#fef2f2; color:#991b1b; }
+    .pill.ok    { border-color:#16a34a; background:#ecfdf5; color:#065f46; }
     .warnmsg { color:#b45309; margin:6px 0 0; }
     .errmsg  { color:#991b1b; margin:6px 0 0; }
     .pill.clickable { cursor: pointer; position: relative; }
@@ -523,13 +524,14 @@
           el.textContent = 'serial: connected';
           el.title = (j.preferred ? `Using ${j.preferred}` : (j.ports && j.ports[0] ? `Using ${j.ports[0]}` : 'connected'));
           el.classList.remove('error','warn');
+          el.classList.add('ok');
         } else {
           const hint = (j.ports && j.ports.length) ? 'not opened (permission?)' : 'not found';
           el.textContent = 'serial: ' + hint;
           el.title = (j.ports && j.ports.length)
             ? `Found: ${j.ports.join(', ')}. Map the correct device in the Unraid template (Add another Path, Port, Variable, Label or Device ➜ Device).`
             : 'No serial devices visible in container. Map /dev/ttyACM* or /dev/ttyUSB* via the template.';
-          el.classList.remove('error','warn');
+          el.classList.remove('error','ok');
           el.classList.add('warn');
         }
       } catch (e) {
@@ -1310,13 +1312,14 @@ function applyValidation(){
             pill.textContent = `connected${ms}`;
             pill.title = (t.port || t.preferred || '') + ms;
             pill.classList.remove('warn','error');
+            pill.classList.add('ok');
           }
         } else {
           if (pill){
             pill.textContent = 'not opened';
             pill.title = (t && t.port) ? String(t.port) : 'no port';
             pill.classList.add('warn');
-            pill.classList.remove('error');
+            pill.classList.remove('error','ok');
           }
         }
       } catch(e){

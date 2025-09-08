@@ -1387,8 +1387,18 @@ def api_serial_tools():
             checks["ping"] = {"ok": False, "ms": dt, "reply": res.get("reply"), "error": res.get("error")}
     else:
         checks["ping"] = {"ok": False, "ms": None, "reply": None, "error": "not connected"}
-
-    return jsonify({"status": status, "checks": checks})
+    # Flatten a few fields for convenience of older UI code
+    payload = {
+        "ok": bool(status.get("connected")),
+        "connected": bool(status.get("connected")),
+        "preferred": status.get("preferred"),
+        "port": status.get("preferred"),
+        "baud": status.get("baud"),
+        "message": status.get("message"),
+        "status": status,
+        "checks": checks,
+    }
+    return jsonify(payload)
 
 
 # --------- API: Serial send a raw line ---------
