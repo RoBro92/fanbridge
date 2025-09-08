@@ -36,7 +36,7 @@ ssd_pwm:
 - 85
 - 100
 single_override_hdd_c: 40
-single_override_ssd_c: 65
+single_override_ssd_c: 70
 override_pwm: 100
 fallback_pwm: 10
 pwm_hysteresis: 3
@@ -62,5 +62,5 @@ sim:
     temp: 41
 auto_apply: true
 auto_apply_min_interval_s: 3
-auto_apply_hysteresis_duty: 5
-log_level: DEBUG
+auto_apply_hysteresis_duty: 3
+log_level: INFO

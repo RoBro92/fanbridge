@@ -358,17 +358,15 @@
   <div id="panel-logs" style="display:none;">
     <div class="panel">
       <h2 style="margin:0 0 10px; display:flex; align-items:center; gap:10px;">Logs</h2>
-      <div class="inputs" style="margin:6px 0 10px;">
-        <label>Runtime level:
-          <select id="log_level">
-            <option value="ERROR">ERROR</option>
-            <option value="WARNING">WARNING</option>
-            <option value="INFO" selected>INFO</option>
-            <option value="DEBUG">DEBUG</option>
-          </select>
-        </label>
-        <span class="small muted">Controls what the server emits. Higher detail may be noisy.</span>
-      </div>
+    <div class="inputs" style="margin:6px 0 10px;">
+      <label>Runtime level:
+        <select id="log_level">
+          <option value="NORMAL" selected>Normal</option>
+          <option value="DEBUG">Debug</option>
+        </select>
+      </label>
+      <span class="small muted">Normal includes warnings/errors; Debug adds verbose diagnostics.</span>
+    </div>
       <div class="inputs" style="margin:6px 0 10px;">
         <label class="chk"><input type="checkbox" class="logfilter" value="ERROR" checked> ERROR</label>
         <label class="chk"><input type="checkbox" class="logfilter" value="WARNING" checked> WARNING</label>
@@ -507,8 +505,8 @@
         }
         const sel = document.getElementById('log_level');
         if (sel && typeof j.level === 'number'){
-          const map = {10:'DEBUG',20:'INFO',30:'WARNING',40:'ERROR',50:'CRITICAL'};
-          sel.value = map[j.level] || sel.value;
+          // Map numeric level to our simplified choices
+          sel.value = (j.level <= 10) ? 'DEBUG' : 'NORMAL';
         }
       }catch(e){ }
     }
@@ -698,13 +696,15 @@ function applyValidation(){
         const ai = document.getElementById('auto_info');
         if (ai) {
           const duty = (j.auto_last_duty !== null && j.auto_last_duty !== undefined) ? j.auto_last_duty : null;
+          const pct = (typeof duty === 'number') ? Math.round((Math.max(0, Math.min(255, duty)) * 100) / 255) : null;
           const when = (j.auto_last_ts ? new Date(j.auto_last_ts * 1000).toLocaleTimeString() : null);
           const paused = !!j.auto_paused;
-          if (duty !== null) {
+          if (pct !== null) {
             ai.style.display = '';
-            ai.textContent = `sent: ${duty} @ ${when || '—'}`;
+            ai.textContent = `sent: ${pct}% @ ${when || '—'}`;
             ai.className = 'pill small' + (paused ? ' warn' : '');
-            ai.title = j.auto_message || (paused ? 'paused' : 'last sent duty and time');
+            const extra = (typeof duty === 'number') ? ` (${duty}/255)` : '';
+            ai.title = j.auto_message || (paused ? `paused${extra}` : `last sent duty and time${extra}`);
           } else {
             ai.style.display = j.auto_apply ? '' : 'none';
             ai.textContent = paused ? 'paused' : '—';

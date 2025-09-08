@@ -169,6 +169,47 @@ def _setup_logging():
 _setup_logging()
 log = logging.getLogger("fanbridge")
 
+_DBG_LAST: dict[str, float] = {}
+def _dbg_should(tag: str, interval_s: int = 10) -> bool:
+    # Skip throttling when explicit spam debug requested
+    if os.environ.get("FANBRIDGE_DEBUG_SPAM") == "1":
+        return True
+    try:
+        now = time.time()
+        last = _DBG_LAST.get(tag, 0.0)
+        if (now - last) >= max(1, interval_s):
+            _DBG_LAST[tag] = now
+            return True
+    except Exception:
+        return True
+    return False
+
+_WARN_ONCE: set[str] = set()
+def _warn_once(key: str, message: str) -> None:
+    try:
+        if key in _WARN_ONCE:
+            return
+        _WARN_ONCE.add(key)
+        logging.getLogger("fanbridge").warning(message)
+    except Exception:
+        pass
+
+def _client_info() -> dict:
+    try:
+        ip = request.headers.get("X-Forwarded-For", request.remote_addr or "")
+        ua = request.headers.get("User-Agent", "")
+        return {"ip": ip, "ua": ua}
+    except Exception:
+        return {}
+
+def _audit(event: str, **data) -> None:
+    try:
+        import json as _json
+        payload = {"event": event, **data, **_client_info()}
+        logging.getLogger("fanbridge").info("audit | %s", _json.dumps(payload, sort_keys=True))
+    except Exception:
+        pass
+
 def _read_version_from_release() -> str | None:
     # Extract version from RELEASE.md/CHANGELOG.md.
     # Accepts formats: "Version: X.Y.Z", "# vX.Y.Z", "## 1.2.3", or "## [1.2.3]".
@@ -629,10 +670,11 @@ def get_serial_status(full: bool = True):
     if not full:
         data.pop("ports", None)
     try:
-        logging.getLogger("fanbridge").debug(
-            "serial | preferred=%s available=%s connected=%s baud=%s msg=%s ports=%s",
-            data.get("preferred"), data.get("available"), data.get("connected"), data.get("baud"), data.get("message"), len(ports)
-        )
+        if _dbg_should("serial", 8):
+            logging.getLogger("fanbridge").debug(
+                "serial | preferred=%s available=%s connected=%s baud=%s msg=%s ports=%s",
+                data.get("preferred"), data.get("available"), data.get("connected"), data.get("baud"), data.get("message"), len(ports)
+            )
     except Exception:
         pass
     return data
@@ -793,8 +835,13 @@ def compute_status():
     try:
         if os.path.exists(DISKS_INI):
             disks_mtime = int(os.path.getmtime(DISKS_INI))
-    except Exception:
-        pass
+        else:
+            _warn_once("disks_ini_missing", f"Could not read {DISKS_INI}; running in sim mode. Map /var/local/emhttp/disks.ini -> /unraid/disks.ini (ro)")
+    except Exception as e:
+        try:
+            logging.getLogger("fanbridge").warning("Failed to stat %s: %s", DISKS_INI, e)
+        except Exception:
+            pass
 
     # Auto-apply PWM to controller if enabled and safe
     auto_enabled = bool(cfg.get("auto_apply"))
@@ -862,10 +909,19 @@ def compute_status():
         "auto_apply_hysteresis_duty": int(cfg.get("auto_apply_hysteresis_duty", 5) or 5),
     }
     try:
-        log.debug(
-            "status | mode=%s hdd_avg=%s ssd_avg=%s pwm=%s drives=%s",
-            mode, hdd.get("avg"), ssd.get("avg"), payload["recommended_pwm"], len(drives)
-        )
+        if _dbg_should("status", 10):
+            log.debug(
+                "status | mode=%s hdd_avg=%s ssd_avg=%s pwm=%s drives=%s",
+                mode, hdd.get("avg"), ssd.get("avg"), payload["recommended_pwm"], len(drives)
+            )
+        # Warn periodically if disks.ini appears stale (>60s)
+        if disks_mtime:
+            try:
+                if (time.time() - float(disks_mtime)) > 60 and _dbg_should("disks_ini_stale_warn", 300):
+                    age = int(time.time() - float(disks_mtime))
+                    log.warning("/unraid/disks.ini appears stale | age_s=%s", age)
+            except Exception:
+                pass
     except Exception:
         pass
     return payload
@@ -882,11 +938,22 @@ def api_auto_apply():
     c = load_config()
     c["auto_apply"] = enable
     save_config(c)
+    try:
+        _audit("auto_apply.toggle", enabled=enable)
+    except Exception:
+        pass
     # If disabling, do not clear last duty/time so UI can display history
     return jsonify({"ok": True, "auto_apply": enable})
 
 # Logs API: tail recent logs and control runtime level
-_LEVELS = {"DEBUG": logging.DEBUG, "INFO": logging.INFO, "WARNING": logging.WARNING, "ERROR": logging.ERROR, "CRITICAL": logging.CRITICAL}
+_LEVELS = {
+    "DEBUG": logging.DEBUG,
+    "NORMAL": logging.INFO,  # alias for INFO (warnings/errors always included)
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRITICAL": logging.CRITICAL,
+}
 
 def _level_from_str(s: str | None, default=logging.INFO) -> int:
     if not s:
@@ -932,17 +999,19 @@ def api_logs():
 def api_log_level():
     data = request.get_json(force=True, silent=True) or {}
     level_name = str(data.get("level", "INFO")).upper()
-    lvl = _LEVELS.get(level_name)
+    # Map friendly aliases
+    canonical = "INFO" if level_name == "NORMAL" else level_name
+    lvl = _LEVELS.get(canonical)
     if lvl is None:
         return jsonify({"ok": False, "error": "invalid level"}), 400
     logging.getLogger().setLevel(lvl)
     try:
         c = load_config()
-        c["log_level"] = level_name
+        c["log_level"] = canonical
         save_config(c)
     except Exception:
         pass
-    return jsonify({"ok": True, "level": level_name})
+    return jsonify({"ok": True, "level": canonical})
 
 @app.post("/api/logs/clear")
 def api_logs_clear():
@@ -1155,10 +1224,10 @@ def _req_log(resp):
         elif code >= 400:
             lg.warning("%s %s -> %s in %sms", meth, path, code, dur_ms)
         else:
-            # Success paths: keep health noisy at debug
+            # Success paths: skip logging for chatty endpoints entirely
             QUIET = ("/health", "/api/status", "/api/serial/status", "/api/logs", "/api/log_level", "/api/logs/download")
             if path in QUIET:
-                lg.debug("%s %s -> %s in %sms", meth, path, code, dur_ms)
+                pass
             else:
                 lg.info("%s %s -> %s in %sms", meth, path, code, dur_ms)
     except Exception:
@@ -1372,6 +1441,10 @@ def api_exclude():
         current.discard(dev)
     c["exclude_devices"] = sorted(current)
     save_config(c)
+    try:
+        _audit("exclude.update", device=dev, excluded=excluded)
+    except Exception:
+        pass
     return jsonify({"ok": True, "exclude_devices": c["exclude_devices"]})
 
 
@@ -1401,6 +1474,10 @@ def api_change_password():
     # update hash
     users.setdefault("users", {})[user] = generate_password_hash(new)
     _save_users(users)
+    try:
+        _audit("auth.password_changed", user=user)
+    except Exception:
+        pass
     return jsonify({"ok": True})
 
 
@@ -1435,6 +1512,11 @@ def api_settings():
     set_int("auto_apply_hysteresis_duty", c.get("auto_apply_hysteresis_duty", 5), clamp=(0, 64))
 
     save_config(c)
+    try:
+        if changed:
+            _audit("settings.update", changed=changed)
+    except Exception:
+        pass
     return jsonify({"ok": True, "changed": changed})
 
 
@@ -1469,6 +1551,18 @@ def api_curves():
     set_list_int("ssd_thresholds")
     set_list_int("ssd_pwm")
     save_config(c)
+    try:
+        if changed:
+            # Log sizes to keep log lines readable; include first few values
+            summary = {}
+            for k, arr in changed.items():
+                if isinstance(arr, list):
+                    summary[k] = {"len": len(arr), "head": arr[:8]}
+                else:
+                    summary[k] = arr
+            _audit("curves.update", changed=summary)
+    except Exception:
+        pass
     return jsonify({"ok": True, "changed": changed})
 
 
@@ -1501,6 +1595,10 @@ def api_reset_defaults():
                 c[k] = defaults[k]
 
         save_config(c)
+        try:
+            _audit("settings.reset_defaults", keys=keys)
+        except Exception:
+            pass
         return jsonify({
             "ok": True,
             "single_override_hdd_c": c.get("single_override_hdd_c"),
