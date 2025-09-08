@@ -96,10 +96,14 @@
     .serial-console .in  { color:#2563eb; }
     .serial-console .out { color:#16a34a; }
     .serial-console .err { color:#dc2626; }
+    /* Log line emphasis */
+    .serial-console .log-warning { color: #d97706; }
+    .serial-console .log-error   { color: #dc2626; }
     .serial-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
     .serial-row input[type="text"] { flex:1 1 220px; padding:6px 8px; }
     .serial-slider { display:flex; align-items:center; gap:10px; }
     .serial-slider input[type="range"]{ width: 220px; }
+    .divider { border-top: 1px solid var(--border); margin: 12px 0; }
     .panel h2 { margin:0 0 8px; font-size:16px; }
     .chk { display:inline-flex; align-items:center; gap:6px; margin:6px 12px 6px 0; }
     .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:6px 12px; }
@@ -228,6 +232,11 @@
           <span id="dirtyFlag" class="pill warn" style="display:none;">Unsaved changes</span>
           <span id="valFlag" class="pill error" style="display:none;">Fix validation errors</span>
         </div>
+        <label class="chk" title="Automatically send recommended PWM to the controller when connected">
+          <input type="checkbox" id="auto_apply">
+          <span>Apply to controller</span>
+        </label>
+        <span id="auto_info" class="pill small" title="Last applied duty and time" style="display:none;">—</span>
         <button id="resetDefaults" class="pill" type="button" title="Reset overrides and fan curves to defaults">Reset to defaults</button>
   </div>
 </div>
@@ -258,6 +267,13 @@
       <button id="savebtn">Save</button>
       <button id="discardbtn" style="display:none;">Discard</button>
     </div>
+
+    <h2 style="margin-top:10px;">Auto-apply settings</h2>
+    <div class="inputs">
+      <label>Min interval (s): <input type="number" id="auto_min" min="1" max="60" step="1"></label>
+      <label>Hysteresis (duty 0–255): <input type="number" id="auto_hyst" min="0" max="64" step="1"></label>
+    </div>
+    <div class="divider"></div>
 
     <h2 style="margin-bottom:8px;">Fan curves</h2>
     <div class="small muted" style="margin-bottom:10px;">
@@ -339,12 +355,49 @@
   </div>
 </div>
 
-<div id="panel-logs" style="display:none;">
-  <div class="panel">
-    <h2>Logs</h2>
-    <p class="small muted">Live logs viewer coming next.</p>
+  <div id="panel-logs" style="display:none;">
+    <div class="panel">
+      <h2 style="margin:0 0 10px; display:flex; align-items:center; gap:10px;">Logs</h2>
+      <div class="inputs" style="margin:6px 0 10px;">
+        <label>Runtime level:
+          <select id="log_level">
+            <option value="ERROR">ERROR</option>
+            <option value="WARNING">WARNING</option>
+            <option value="INFO" selected>INFO</option>
+            <option value="DEBUG">DEBUG</option>
+          </select>
+        </label>
+        <span class="small muted">Controls what the server emits. Higher detail may be noisy.</span>
+      </div>
+      <div class="inputs" style="margin:6px 0 10px;">
+        <label class="chk"><input type="checkbox" class="logfilter" value="ERROR" checked> ERROR</label>
+        <label class="chk"><input type="checkbox" class="logfilter" value="WARNING" checked> WARNING</label>
+        <label class="chk"><input type="checkbox" class="logfilter" value="INFO" checked> INFO</label>
+        <label class="chk"><input type="checkbox" class="logfilter" value="DEBUG"> DEBUG</label>
+        <span class="small muted">Client-side view filter</span>
+      </div>
+      <div class="inputs" style="margin:6px 0 10px; align-items: flex-end;">
+        <div>
+          <label>Download as:
+            <select id="log_dl_fmt">
+              <option value="text" selected>Text (.txt)</option>
+              <option value="json">JSON (.json)</option>
+            </select>
+          </label>
+        </div>
+        <div>
+          <label>From: <input type="datetime-local" id="log_from"/></label>
+        </div>
+        <div>
+          <label>To: <input type="datetime-local" id="log_to"/></label>
+        </div>
+        <button id="log_dl_btn">Download</button>
+        <button id="log_clear_btn" title="Clear in-memory log buffer">Clear logs</button>
+        <span class="small muted">Download uses current view’s minimum level and optional time window.</span>
+      </div>
+      <div id="logbox" class="serial-console" style="height:320px;"></div>
+    </div>
   </div>
-</div>
 
   <!-- Modal: Change Password -->
   <div id="pwModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); align-items:center; justify-content:center; z-index:1000;">
@@ -401,8 +454,9 @@
         if (btn) btn.classList.toggle('tab--active', k===name);
       });
       try { localStorage.setItem('fanbridgeTab', name); } catch(e){}
-      // If user switched to the Serial tab, force an immediate serial refresh
+      // Trigger immediate updates on tab switch
       try { if (name === 'serial' && typeof refreshSerial === 'function') refreshSerial(); } catch(e){}
+      try { if (name === 'logs') startLogs(); else stopLogs(); } catch(e){}
     }
     document.querySelectorAll('.tabs .tab[data-tab]').forEach(b=>{
       b.addEventListener('click', ()=> showTab(b.dataset.tab));
@@ -422,6 +476,44 @@
       if (pb) pb.textContent = `refresh: every ${Math.max(3, Math.min(60, pollSeconds))}s`;
       if (pb) pb.title = 'Click to change the refresh interval (3–60 seconds)';
     }
+    // Logs polling
+    let logsTimer = null;
+    let logsSince = 0;
+    let logFilters = new Set(['ERROR','WARNING','INFO']);
+    function logsAppend(items){
+      const box = document.getElementById('logbox');
+      if (!box) return;
+      const frag = document.createDocumentFragment();
+      for (const it of items){
+        if (!logFilters.has(String(it.level).toUpperCase())) continue;
+        const line = document.createElement('div');
+        const ts = new Date((it.ts||0)*1000).toLocaleTimeString();
+        const lvl = String(it.level || '').toUpperCase();
+        const lvlCls = (lvl === 'ERROR') ? 'log-error' : (lvl === 'WARNING') ? 'log-warning' : '';
+        line.className = 'line' + (lvlCls ? (' ' + lvlCls) : '');
+        line.innerHTML = `<span class=\"ts\">${ts}</span> <strong>[${it.level}]</strong> <span class=\"muted\">${it.name}</span> ${it.msg}`;
+        frag.appendChild(line);
+      }
+      box.appendChild(frag);
+      box.scrollTop = box.scrollHeight;
+    }
+    async function logsTick(){
+      try{
+        const r = await fetch(`/api/logs?since=${logsSince}&min_level=DEBUG&limit=400`, { cache:'no-store' });
+        const j = await r.json();
+        if (j && j.items && j.items.length){
+          logsAppend(j.items);
+          logsSince = j.last_id || logsSince;
+        }
+        const sel = document.getElementById('log_level');
+        if (sel && typeof j.level === 'number'){
+          const map = {10:'DEBUG',20:'INFO',30:'WARNING',40:'ERROR',50:'CRITICAL'};
+          sel.value = map[j.level] || sel.value;
+        }
+      }catch(e){ }
+    }
+    function startLogs(){ if (logsTimer) clearInterval(logsTimer); logsTimer = setInterval(logsTick, 2000); logsTick(); }
+    function stopLogs(){ if (logsTimer) clearInterval(logsTimer); logsTimer = null; }
     // Serial status updater
     async function refreshSerial(){
       const el = document.getElementById('serialpill');
@@ -599,6 +691,33 @@ function applyValidation(){
         if (Array.isArray(j.hdd_pwm)) HPW = j.hdd_pwm.slice();
         if (Array.isArray(j.ssd_thresholds)) STH = j.ssd_thresholds.slice();
         if (Array.isArray(j.ssd_pwm)) SPW = j.ssd_pwm.slice();
+
+        // Auto-apply UI: reflect server state
+        const aa = document.getElementById('auto_apply');
+        if (aa) aa.checked = !!j.auto_apply;
+        const ai = document.getElementById('auto_info');
+        if (ai) {
+          const duty = (j.auto_last_duty !== null && j.auto_last_duty !== undefined) ? j.auto_last_duty : null;
+          const when = (j.auto_last_ts ? new Date(j.auto_last_ts * 1000).toLocaleTimeString() : null);
+          const paused = !!j.auto_paused;
+          if (duty !== null) {
+            ai.style.display = '';
+            ai.textContent = `sent: ${duty} @ ${when || '—'}`;
+            ai.className = 'pill small' + (paused ? ' warn' : '');
+            ai.title = j.auto_message || (paused ? 'paused' : 'last sent duty and time');
+          } else {
+            ai.style.display = j.auto_apply ? '' : 'none';
+            ai.textContent = paused ? 'paused' : '—';
+            ai.className = 'pill small' + (paused ? ' warn' : '');
+            ai.title = j.auto_message || '';
+          }
+        }
+
+        // Populate auto-apply tuning inputs
+        const am = document.getElementById('auto_min');
+        const ah = document.getElementById('auto_hyst');
+        if (am && typeof j.auto_apply_min_interval_s === 'number') am.value = j.auto_apply_min_interval_s;
+        if (ah && typeof j.auto_apply_hysteresis_duty === 'number') ah.value = j.auto_apply_hysteresis_duty;
 
         const rows = document.getElementById('rows');
         rows.innerHTML = '';
@@ -888,6 +1007,10 @@ function applyValidation(){
 
     document.getElementById('hddovr').addEventListener('input', ()=> setDirty('ovr', true));
     document.getElementById('ssdovr').addEventListener('input', ()=> setDirty('ovr', true));
+    const autoMinEl = document.getElementById('auto_min');
+    const autoHystEl = document.getElementById('auto_hyst');
+    if (autoMinEl) autoMinEl.addEventListener('input', ()=> setDirty('ovr', true));
+    if (autoHystEl) autoHystEl.addEventListener('input', ()=> setDirty('ovr', true));
 
     document.getElementById('savebtn').addEventListener('click', async () => {
       const h = parseInt(document.getElementById('hddovr').value, 10);
@@ -898,7 +1021,9 @@ function applyValidation(){
           headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
           body: JSON.stringify({
             single_override_hdd_c: isNaN(h) ? undefined : h,
-            single_override_ssd_c: isNaN(s) ? undefined : s
+            single_override_ssd_c: isNaN(s) ? undefined : s,
+            auto_apply_min_interval_s: (autoMinEl && !isNaN(parseInt(autoMinEl.value,10))) ? parseInt(autoMinEl.value,10) : undefined,
+            auto_apply_hysteresis_duty: (autoHystEl && !isNaN(parseInt(autoHystEl.value,10))) ? parseInt(autoHystEl.value,10) : undefined
           })
         });
         setDirty('ovr', false);
@@ -1000,6 +1125,90 @@ function applyValidation(){
       // Update menu item label if present
       const mTheme = document.getElementById('menuTheme');
       if (mTheme) mTheme.textContent = 'Theme: ' + (pref === 'dark' ? 'Dark' : 'Light');
+    })();
+  </script>
+  <script>
+    // Logs download helper
+    (function(){
+      const btn = document.getElementById('log_dl_btn');
+      const fmtSel = document.getElementById('log_dl_fmt');
+      const fromEl = document.getElementById('log_from');
+      const toEl = document.getElementById('log_to');
+      const clrBtn = document.getElementById('log_clear_btn');
+      if (!btn || !fmtSel) return;
+      function currentMin(){
+        if (logFilters.has('DEBUG')) return 'DEBUG';
+        if (logFilters.has('INFO')) return 'INFO';
+        if (logFilters.has('WARNING')) return 'WARNING';
+        return 'ERROR';
+      }
+      function toEpochSeconds(el){
+        if (!el || !el.value) return null;
+        try { return Math.floor(new Date(el.value).getTime()/1000); } catch(e){ return null; }
+      }
+      btn.addEventListener('click', ()=>{
+        const fmt = fmtSel.value || 'text';
+        const min = currentMin();
+        const fromTs = toEpochSeconds(fromEl);
+        const toTs = toEpochSeconds(toEl);
+        const parts = [
+          `format=${encodeURIComponent(fmt)}`,
+          `min_level=${encodeURIComponent(min)}`,
+        ];
+        if (fromTs) parts.push(`from_ts=${fromTs}`);
+        if (toTs) parts.push(`to_ts=${toTs}`);
+        const url = `/api/logs/download?${parts.join('&')}`;
+        try { window.open(url, '_blank'); } catch(e){ window.location.href = url; }
+      });
+      if (clrBtn) clrBtn.addEventListener('click', async ()=>{
+        try{
+          await fetch('/api/logs/clear', { method:'POST', headers: { 'X-CSRF-Token': CSRF } });
+          const box = document.getElementById('logbox'); if (box) box.innerHTML='';
+          logsSince = 0;
+          showToast('Logs cleared', 'ok');
+        }catch(e){ showToast('Failed to clear logs', 'error'); }
+      });
+    })();
+  </script>
+  <script>
+    // Toggle handler for auto-apply
+    (function(){
+      const aa = document.getElementById('auto_apply');
+      if (!aa) return;
+      aa.addEventListener('change', async () => {
+        try {
+          await fetch('/api/auto_apply', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
+            body: JSON.stringify({ enabled: !!aa.checked })
+          });
+        } catch (e) { console.error(e); }
+      });
+    })();
+  </script>
+  <script>
+    // Logs controls
+    (function(){
+      const box = document.getElementById('logbox');
+      const sel = document.getElementById('log_level');
+      document.querySelectorAll('.logfilter').forEach(cb=>{
+        cb.addEventListener('change', ()=>{
+          const v = cb.value.toUpperCase();
+          if (cb.checked) logFilters.add(v); else logFilters.delete(v);
+          if (box) box.innerHTML = '';
+          logsSince = 0;
+          logsTick();
+        });
+      });
+      if (sel) sel.addEventListener('change', async ()=>{
+        try{
+          await fetch('/api/log_level', {
+            method:'POST',
+            headers: { 'Content-Type':'application/json', 'X-CSRF-Token': CSRF },
+            body: JSON.stringify({ level: sel.value })
+          });
+        }catch(e){ console.error(e); }
+      });
     })();
   </script>
   <script>

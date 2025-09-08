@@ -102,6 +102,42 @@ if load_dotenv:
             pass
 
 # ---------- logging setup ----------
+# In-memory ring buffer for recent logs exposed via /api/logs
+try:
+    from collections import deque
+    import threading
+    _LOG_RING = deque(maxlen=2000)
+    _LOG_LOCK = threading.Lock()
+    _LOG_NEXT_ID = 1
+except Exception:
+    _LOG_RING = []  # type: ignore[assignment]
+    _LOG_LOCK = None  # type: ignore[assignment]
+    _LOG_NEXT_ID = 1
+
+class RingBufferHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:  # type: ignore[override]
+        try:
+            msg = record.getMessage()
+        except Exception:
+            msg = str(getattr(record, 'message', ''))
+        try:
+            global _LOG_NEXT_ID
+            item = {
+                "id": int(_LOG_NEXT_ID),
+                "ts": int(getattr(record, 'created', time.time())),
+                "level": str(record.levelname),
+                "name": str(record.name),
+                "msg": msg,
+            }
+            _LOG_NEXT_ID += 1
+            if _LOG_LOCK is not None:
+                with _LOG_LOCK:
+                    _LOG_RING.append(item)
+            else:
+                _LOG_RING.append(item)  # type: ignore[union-attr]
+        except Exception:
+            pass
+
 def _setup_logging():
     lvl_name = os.environ.get("FANBRIDGE_LOG_LEVEL") or ("DEBUG" if os.environ.get("FLASK_DEBUG") else "INFO")
     level = getattr(logging, str(lvl_name).upper(), logging.INFO)
@@ -112,6 +148,12 @@ def _setup_logging():
         fmt = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
         handler.setFormatter(logging.Formatter(fmt))
         root.addHandler(handler)
+    # Attach ring buffer handler once
+    try:
+        if not any(isinstance(h, RingBufferHandler) for h in root.handlers):
+            root.addHandler(RingBufferHandler())
+    except Exception:
+        pass
     root.setLevel(level)
 
     # Reduce noisy libraries; keep Flask startup line visible in debug
@@ -235,7 +277,11 @@ DEFAULT_CONFIG = {
     "exclude_devices": [],
     "idle_cutoff_hdd_c": 30,  
     "idle_cutoff_ssd_c": 35,  
-    "sim": { "drives": [] },        
+    "sim": { "drives": [] },
+    # Auto-apply PWM to microcontroller (local/dev or container) — disabled by default
+    "auto_apply": False,
+    "auto_apply_min_interval_s": 3,          # minimum seconds between sends
+    "auto_apply_hysteresis_duty": 5,         # minimum change in 0..255 units
 }
 
 def _load_users() -> dict:
@@ -256,17 +302,31 @@ def _save_users(users: dict) -> None:
     with open(USERS_PATH, "w") as f:
         yaml.safe_dump(users, f, sort_keys=False)
 
-_RATE = {}  # ip -> [timestamps]
-def _allow(ip: str, limit=20, window=60) -> bool:
-    now = time.time()
-    arr = _RATE.get(ip, [])
-    arr = [t for t in arr if now - t < window]
-    if len(arr) >= limit:
-        _RATE[ip] = arr
-        return False
-    arr.append(now)
-    _RATE[ip] = arr
-    return True
+# Rate limiting (per-IP, per-key)
+# _RATE maps (ip, key) -> [timestamps]
+_RATE: dict[tuple[str, str], list[float]] = {}
+
+def _allow(ip: str, key: str, *, limit: int = 20, window: int = 60) -> bool:
+    """
+    Return True if allowed for (ip,key), else False.
+    - key groups similar endpoints, e.g. 'serial_send', 'settings', etc.
+    - window in seconds, sliding.
+    """
+    try:
+        now = time.time()
+        k = (ip or "?", key or "*")
+        arr = _RATE.get(k, [])
+        # drop old
+        arr = [t for t in arr if now - t < window]
+        if len(arr) >= limit:
+            _RATE[k] = arr
+            return False
+        arr.append(now)
+        _RATE[k] = arr
+        return True
+    except Exception:
+        # fail-open
+        return True
 
 def _ensure_csrf_token() -> str:
     tok = session.get("csrf_token")
@@ -577,6 +637,11 @@ def get_serial_status(full: bool = True):
         pass
     return data
 
+# ---------- Auto-apply PWM state ----------
+_AUTO_LAST_DUTY: int | None = None
+_AUTO_LAST_TS: float | None = None
+_AUTO_PAUSED_MSG: str | None = None
+
 #
 # ---------- Serial send helpers used by API ----------
 #
@@ -731,6 +796,45 @@ def compute_status():
     except Exception:
         pass
 
+    # Auto-apply PWM to controller if enabled and safe
+    auto_enabled = bool(cfg.get("auto_apply"))
+    auto_last_duty = _AUTO_LAST_DUTY
+    auto_last_ts = _AUTO_LAST_TS
+    auto_paused_msg = None
+    if auto_enabled:
+        try:
+            # Only attempt if serial looks connected
+            sstat = get_serial_status(full=False)
+            if not sstat.get("connected"):
+                auto_paused_msg = "controller not connected"
+            else:
+                # Map 0–100% → 0–255
+                pct = int(recommended_pwm)
+                if pct < 0: pct = 0
+                if pct > 100: pct = 100
+                duty = int(round(pct * 255 / 100))
+                # Apply hysteresis and min interval
+                min_ivl = int(cfg.get("auto_apply_min_interval_s", 3) or 3)
+                hyst = int(cfg.get("auto_apply_hysteresis_duty", 5) or 5)
+                now_ts = time.time()
+                delta_ok = (_AUTO_LAST_DUTY is None) or (abs(duty - int(_AUTO_LAST_DUTY)) >= max(0, hyst))
+                ivl_ok = (_AUTO_LAST_TS is None) or ((now_ts - float(_AUTO_LAST_TS)) >= max(1, min_ivl))
+                if delta_ok and ivl_ok:
+                    res = _serial_set_pwm_byte(duty)
+                    if res.get("ok"):
+                        auto_last_duty = duty
+                        auto_last_ts = now_ts
+                        globals()["_AUTO_LAST_DUTY"] = duty
+                        globals()["_AUTO_LAST_TS"] = now_ts
+                    else:
+                        auto_paused_msg = str(res.get("error") or "send failed")
+        except Exception as e:
+            try:
+                logging.getLogger("fanbridge").warning("auto-apply error: %s", e)
+            except Exception:
+                pass
+            auto_paused_msg = "auto-apply error"
+
     payload = {
         "drives": drives,
         "hdd": hdd,
@@ -747,6 +851,15 @@ def compute_status():
         "mode": mode,
         "version": APP_VERSION,
         "disks_ini_mtime": disks_mtime,
+        # Auto-apply reporting
+        "auto_apply": auto_enabled,
+        "auto_last_duty": int(auto_last_duty) if auto_last_duty is not None else None,
+        "auto_last_ts": int(auto_last_ts) if auto_last_ts is not None else None,
+        "auto_paused": bool(auto_paused_msg),
+        "auto_message": auto_paused_msg,
+        # Auto-apply config values for client UI
+        "auto_apply_min_interval_s": int(cfg.get("auto_apply_min_interval_s", 3) or 3),
+        "auto_apply_hysteresis_duty": int(cfg.get("auto_apply_hysteresis_duty", 5) or 5),
     }
     try:
         log.debug(
@@ -760,6 +873,258 @@ def compute_status():
 @app.get("/health")
 def health():
     return jsonify({"status": "ok", "uptime_s": int(time.time() - STARTED)})
+
+# Toggle auto-apply on/off
+@app.post("/api/auto_apply")
+def api_auto_apply():
+    data = request.get_json(force=True, silent=True) or {}
+    enable = bool(data.get("enabled"))
+    c = load_config()
+    c["auto_apply"] = enable
+    save_config(c)
+    # If disabling, do not clear last duty/time so UI can display history
+    return jsonify({"ok": True, "auto_apply": enable})
+
+# Logs API: tail recent logs and control runtime level
+_LEVELS = {"DEBUG": logging.DEBUG, "INFO": logging.INFO, "WARNING": logging.WARNING, "ERROR": logging.ERROR, "CRITICAL": logging.CRITICAL}
+
+def _level_from_str(s: str | None, default=logging.INFO) -> int:
+    if not s:
+        return int(default)
+    return int(_LEVELS.get(str(s).upper(), int(default)))
+
+@app.get("/api/logs")
+def api_logs():
+    try:
+        since = int(request.args.get("since", "0") or "0")
+    except Exception:
+        since = 0
+    min_level = _level_from_str(request.args.get("min_level"), default=logging.DEBUG)
+    limit = 500
+    try:
+        limit = max(1, min(1000, int(request.args.get("limit", "500") or "500")))
+    except Exception:
+        pass
+    items = []
+    last_id = since
+    try:
+        src = list(_LOG_RING) if isinstance(_LOG_RING, list) else list(_LOG_RING)
+        for it in src:
+            if int(it.get("id", 0)) <= since:
+                continue
+            lvl = str(it.get("level", "INFO")).upper()
+            if _LEVELS.get(lvl, 0) < min_level:
+                continue
+            items.append(it)
+            last_id = int(it.get("id", last_id))
+            if len(items) >= limit:
+                break
+    except Exception:
+        pass
+    return jsonify({
+        "ok": True,
+        "items": items,
+        "last_id": last_id,
+        "level": logging.getLogger().level,
+    })
+
+@app.post("/api/log_level")
+def api_log_level():
+    data = request.get_json(force=True, silent=True) or {}
+    level_name = str(data.get("level", "INFO")).upper()
+    lvl = _LEVELS.get(level_name)
+    if lvl is None:
+        return jsonify({"ok": False, "error": "invalid level"}), 400
+    logging.getLogger().setLevel(lvl)
+    try:
+        c = load_config()
+        c["log_level"] = level_name
+        save_config(c)
+    except Exception:
+        pass
+    return jsonify({"ok": True, "level": level_name})
+
+@app.post("/api/logs/clear")
+def api_logs_clear():
+    try:
+        count = 0
+        if _LOG_LOCK is not None:
+            with _LOG_LOCK:
+                count = len(_LOG_RING)  # type: ignore[arg-type]
+                _LOG_RING.clear()       # type: ignore[union-attr]
+        else:
+            count = len(_LOG_RING)      # type: ignore[arg-type]
+            _LOG_RING.clear()           # type: ignore[union-attr]
+        return jsonify({"ok": True, "cleared": count})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.get("/api/logs/download")
+def api_logs_download():
+    fmt = (request.args.get("format", "text") or "text").lower()
+    min_level = _level_from_str(request.args.get("min_level"), default=logging.DEBUG)
+    # Optional time window filters (epoch seconds or ISO 8601)
+    def _parse_ts(val: str | None) -> int | None:
+        if not val:
+            return None
+        s = val.strip()
+        try:
+            # epoch seconds
+            return int(float(s))
+        except Exception:
+            pass
+        try:
+            # ISO like YYYY-MM-DDTHH:MM
+            return int(datetime.datetime.fromisoformat(s).timestamp())
+        except Exception:
+            return None
+    from_ts = _parse_ts(request.args.get("from_ts"))
+    to_ts = _parse_ts(request.args.get("to_ts"))
+    try:
+        src = list(_LOG_RING) if isinstance(_LOG_RING, list) else list(_LOG_RING)
+    except Exception:
+        src = []
+    items = []
+    for it in src:
+        lvl = str(it.get("level", "INFO")).upper()
+        if _LEVELS.get(lvl, 0) < min_level:
+            continue
+        try:
+            its = int(it.get("ts", 0))
+        except Exception:
+            its = 0
+        if from_ts is not None and its < from_ts:
+            continue
+        if to_ts is not None and its > to_ts:
+            continue
+        items.append(it)
+    # Build diagnostics bundle
+    def _collect_diagnostics() -> dict:
+        import platform as _platform
+        info: dict = {}
+        # basics
+        info["timestamp_utc"] = datetime.datetime.utcnow().isoformat(timespec='seconds')
+        info["uptime_s"] = int(time.time() - STARTED)
+        info["version"] = APP_VERSION
+        info["in_docker"] = _in_docker()
+        try:
+            info["python"] = sys.version.split()[0]
+            info["platform"] = f"{sys.platform} | {_platform.platform()}"
+        except Exception:
+            pass
+        # paths
+        try:
+            info["paths"] = {
+                "config": {"path": CONFIG_PATH, "exists": os.path.exists(CONFIG_PATH)},
+                "users":  {"path": USERS_PATH,  "exists": os.path.exists(USERS_PATH)},
+                "disks_ini": {
+                    "path": DISKS_INI,
+                    "exists": os.path.exists(DISKS_INI),
+                    "mtime": int(os.path.getmtime(DISKS_INI)) if os.path.exists(DISKS_INI) else None,
+                },
+            }
+        except Exception:
+            pass
+        # environment (limited to FANBRIDGE_*)
+        try:
+            info["env"] = {k: v for (k, v) in os.environ.items() if k.upper().startswith("FANBRIDGE_")}
+        except Exception:
+            pass
+        # serial status + controller version probe (best-effort)
+        try:
+            info["serial_status"] = get_serial_status(full=True)
+        except Exception as e:
+            info["serial_status"] = {"error": str(e)}
+        try:
+            vres = _serial_send_line("VERSION?", expect_reply=True)
+            info["controller_version_reply"] = vres.get("reply")
+        except Exception:
+            pass
+        # mounts (subset)
+        try:
+            mounts = []
+            with open("/proc/mounts", "r", encoding="utf-8", errors="ignore") as f:
+                for ln in f.readlines()[:500]:
+                    if any(tag in ln for tag in ("/config", "/unraid", "/proc", "/sys", "/")):
+                        mounts.append(ln.strip())
+            info["mounts"] = mounts
+        except Exception:
+            info["mounts"] = []
+        return info
+
+    diagnostics = _collect_diagnostics()
+
+    # Build response with attachment headers
+    ts = datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    filename = f"fanbridge-logs-{ts}.{ 'json' if fmt == 'json' else 'txt' }"
+    if fmt == "json":
+        import json as _json
+        payload = {"ok": True, "diagnostics": diagnostics, "items": items}
+        resp = make_response(_json.dumps(payload, ensure_ascii=False))
+        resp.headers["Content-Type"] = "application/json; charset=utf-8"
+    else:
+        # Plaintext: one line per log
+        lines = []
+        # diagnostics header
+        lines.append("==== FanBridge Diagnostics ====")
+        lines.append(f"Timestamp (UTC): {diagnostics.get('timestamp_utc')}")
+        lines.append(f"Uptime (s): {diagnostics.get('uptime_s')}")
+        lines.append(f"Version: {diagnostics.get('version')}")
+        lines.append(f"In Docker: {diagnostics.get('in_docker')}")
+        py = diagnostics.get('python'); plat = diagnostics.get('platform')
+        lines.append(f"Python: {py} | Platform: {plat}")
+        # paths summary
+        try:
+            p = diagnostics.get('paths', {})
+            lines.append("Paths:")
+            for key in ("config", "users", "disks_ini"):
+                item = p.get(key, {}) if isinstance(p, dict) else {}
+                lines.append(f"  - {key}: {item.get('path')} exists={item.get('exists')} mtime={item.get('mtime')}")
+        except Exception:
+            pass
+        # env summary
+        try:
+            env = diagnostics.get('env', {}) or {}
+            if env:
+                lines.append("Env (FANBRIDGE_*):")
+                for k, v in env.items():
+                    lines.append(f"  {k}={v}")
+        except Exception:
+            pass
+        # serial summary
+        try:
+            ss = diagnostics.get('serial_status', {}) or {}
+            lines.append("Serial:")
+            lines.append(f"  connected={ss.get('connected')} preferred={ss.get('preferred')} baud={ss.get('baud')} message={ss.get('message')}")
+            ports = ss.get('ports') or []
+            if ports:
+                lines.append(f"  ports: {', '.join(ports[:12])}{' ...' if len(ports)>12 else ''}")
+            cv = diagnostics.get('controller_version_reply')
+            if cv:
+                lines.append(f"  controller VERSION?: {cv}")
+        except Exception:
+            pass
+        # mounts subset
+        try:
+            m = diagnostics.get('mounts') or []
+            if m:
+                lines.append("Mounts:")
+                for ln in m[:50]:
+                    lines.append(f"  {ln}")
+        except Exception:
+            pass
+        lines.append("==== End Diagnostics ====")
+        lines.append("")
+        for it in items:
+            try:
+                t = datetime.datetime.fromtimestamp(int(it.get("ts", 0))).isoformat(timespec='seconds')
+            except Exception:
+                t = str(it.get("ts", ""))
+            lines.append(f"{t} | {it.get('level','')} | {it.get('name','')} | {it.get('msg','')}")
+        resp = make_response("\n".join(lines) + ("\n" if lines else ""))
+        resp.headers["Content-Type"] = "text/plain; charset=utf-8"
+    resp.headers["Content-Disposition"] = f"attachment; filename=\"{filename}\""
+    return resp
 
 @app.after_request
 def add_no_cache(resp):
@@ -791,7 +1156,8 @@ def _req_log(resp):
             lg.warning("%s %s -> %s in %sms", meth, path, code, dur_ms)
         else:
             # Success paths: keep health noisy at debug
-            if path in ("/health", "/api/status", "/api/serial/status"):
+            QUIET = ("/health", "/api/status", "/api/serial/status", "/api/logs", "/api/log_level", "/api/logs/download")
+            if path in QUIET:
                 lg.debug("%s %s -> %s in %sms", meth, path, code, dur_ms)
             else:
                 lg.info("%s %s -> %s in %sms", meth, path, code, dur_ms)
@@ -818,10 +1184,33 @@ def _auth_and_rate():
     # require login
     if "user" not in session:
         return redirect(url_for("login", next=request.path))
-    # rate limit
+
+    # --- Rate limiting ---
+    # Skip rate limiting for safe GETs to keep UI snappy
+    if request.method == "GET":
+        return
+
+    # Per-endpoint buckets with relaxed limits for serial actions
     ip = request.headers.get("X-Forwarded-For", request.remote_addr or "")
-    if not _allow(ip):
-        return make_response(("Too Many Requests", 429))
+    key = "mutate"
+    limit, window = 60, 60  # default for POST-ish
+
+    if p == "/api/serial/send":
+        key = "serial_send"
+        limit, window = 120, 60   # allow ~2/sec
+    elif p == "/api/serial/pwm":
+        key = "serial_pwm"
+        limit, window = 120, 60
+    elif p in ("/api/settings", "/api/curves", "/api/reset_defaults", "/api/exclude", "/api/change_password"):
+        key = p  # separate buckets for config endpoints
+        limit, window = 30, 60
+
+    if not _allow(ip, key, limit=limit, window=window):
+        resp = make_response(("Too Many Requests", 429))
+        # Provide a minimal Retry-After hint (seconds)
+        resp.headers["Retry-After"] = "10"
+        return resp
+
     # CSRF on modifying requests
     if request.method in ("POST", "PUT", "PATCH", "DELETE"):
         if not _require_csrf():
@@ -1041,6 +1430,9 @@ def api_settings():
     set_int("single_override_ssd_c", c.get("single_override_ssd_c", 60))
     # New: allow changing the UI refresh interval (3–60s)
     set_int("poll_interval_seconds", c.get("poll_interval_seconds", 7), clamp=(3, 60))
+    # Auto-apply tuning (optional)
+    set_int("auto_apply_min_interval_s", c.get("auto_apply_min_interval_s", 3), clamp=(1, 60))
+    set_int("auto_apply_hysteresis_duty", c.get("auto_apply_hysteresis_duty", 5), clamp=(0, 64))
 
     save_config(c)
     return jsonify({"ok": True, "changed": changed})
@@ -1100,6 +1492,9 @@ def api_reset_defaults():
             "ssd_thresholds",
             "ssd_pwm",
             "poll_interval_seconds",
+            "auto_apply",
+            "auto_apply_min_interval_s",
+            "auto_apply_hysteresis_duty",
         ]
         for k in keys:
             if k in defaults:
