@@ -595,8 +595,10 @@ def list_serial_ports():
     if list_ports:
         try:
             for p in list_ports.comports():
-                if p.device:
-                    candidates.append(p.device)
+                dev = p.device or ""
+                # Only include USB-like CDC ports; avoid TTY serial consoles (ttyS*)
+                if dev.startswith("/dev/serial/by-id/") or dev.startswith("/dev/ttyACM") or dev.startswith("/dev/ttyUSB"):
+                    candidates.append(dev)
         except Exception:
             pass
     return _unique_order(candidates)
@@ -605,6 +607,9 @@ def list_serial_ports():
 def probe_serial_open(port: str, baud: int | None = None):
     if not port:
         return False, "no port specified"
+    # Avoid treating system serial consoles as valid devices
+    if port.startswith("/dev/ttyS"):
+        return False, "not a USB CDC device"
     if serial is None:
         return False, "pyserial not available"
     try:
@@ -689,7 +694,7 @@ def get_serial_status(full: bool = True):
         "preferred": preferred,
         "ports": ports if full else None,
         "available": available,
-        "connected": connected,
+        "connected": (connected and not (preferred or "").startswith("/dev/ttyS")),
         "baud": SERIAL_BAUD,
         "message": message,
     }
