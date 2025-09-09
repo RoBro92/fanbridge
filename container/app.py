@@ -323,6 +323,14 @@ DEFAULT_CONFIG = {
     "auto_apply": False,
     "auto_apply_min_interval_s": 3,          # minimum seconds between sends
     "auto_apply_hysteresis_duty": 5,         # minimum change in 0..255 units
+    # RP firmware update settings
+    "rp": {
+        # URL hosting a manifest.json and UF2 files; adjustable in UI
+        # Example expected: <base>/manifest.json -> { items: [{ board, version, url }] }
+        "repo_url": "https://raw.githubusercontent.com/RoBro92/fanbridge-link/main",
+        # Optional: override board name; default 'rp2040'
+        "board": "rp2040",
+    },
 }
 
 def _load_users() -> dict:
@@ -748,9 +756,15 @@ def _serial_send_line(line: str, expect_reply: bool = True, timeout: float = 1.0
             pass
 
 from typing import Any
+import json as _json
+import urllib.request
+import urllib.error
+import tempfile
+import shutil
+import subprocess
 
 def _serial_set_pwm_byte(value: Any) -> dict:
-    # clamps 0..255 and sends "SET PWM <n>"
+    # clamps 0..255 and sends percentage (0..100) as a raw line
     if not isinstance(value, (int, float, str)):
         return {"ok": False, "error": "invalid value"}
     try:
@@ -759,9 +773,104 @@ def _serial_set_pwm_byte(value: Any) -> dict:
         return {"ok": False, "error": "invalid value"}
     if v < 0: v = 0
     if v > 255: v = 255
-    res = _serial_send_line(f"SET PWM {v}", expect_reply=True)
-    res["value"] = v
+    # Convert raw duty (0..255) to 0..100 percentage expected by controller
+    pct = int(round((v * 100) / 255))
+    res = _serial_send_line(str(pct), expect_reply=True)
+    res["value"] = pct
     return res
+
+
+# ---------- RP update helpers ----------
+def _has_cap_sys_admin() -> bool:
+    try:
+        with open("/proc/self/status", "r", encoding="utf-8", errors="ignore") as f:
+            for ln in f:
+                if ln.startswith("CapEff:"):
+                    # Heuristic: non-zero indicates some caps; we can't decode bits reliably here
+                    val = ln.split(":", 1)[1].strip()
+                    return any(ch != "0" for ch in val)
+    except Exception:
+        pass
+    # Fallback: presence of /dev/disk/by-label and ability to list
+    try:
+        return os.path.exists("/dev/disk/by-label")
+    except Exception:
+        return False
+
+def _usb_info_for_port(port: str | None) -> dict:
+    info: dict = {}
+    if not port:
+        return info
+    if list_ports:
+        try:
+            for p in list_ports.comports():
+                if p.device == port:
+                    info = {
+                        "device": p.device,
+                        "vid": getattr(p, "vid", None),
+                        "pid": getattr(p, "pid", None),
+                        "manufacturer": getattr(p, "manufacturer", None),
+                        "product": getattr(p, "product", None),
+                        "serial_number": getattr(p, "serial_number", None),
+                        "hwid": getattr(p, "hwid", None),
+                        "location": getattr(p, "location", None),
+                    }
+                    break
+        except Exception:
+            pass
+    return info
+
+def _http_get_json(url: str, timeout: float = 6.0) -> dict | None:
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "fanbridge/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if 200 <= resp.status < 300:
+                data = resp.read()
+                return _json.loads(data.decode("utf-8", errors="ignore"))
+    except Exception:
+        return None
+    return None
+
+def _select_latest_for_board(items: list[dict], board: str) -> dict | None:
+    # items: [{board, version, url}]
+    def parse_ver(v: str) -> tuple:
+        try:
+            core = v.strip().lstrip("vV")
+            parts = core.split("-")[0]
+            nums = [int(x) for x in parts.split(".") if x.isdigit()]
+            return tuple(nums + [0] * (3 - len(nums)))
+        except Exception:
+            return (0, 0, 0)
+    candidates = [it for it in (items or []) if str(it.get("board", "")).lower() == str(board).lower()]
+    candidates.sort(key=lambda it: parse_ver(str(it.get("version", "0"))), reverse=True)
+    return candidates[0] if candidates else None
+
+def _find_rp2_dev_symlink() -> str | None:
+    try:
+        path = "/dev/disk/by-label/RPI-RP2"
+        if os.path.exists(path):
+            return os.path.realpath(path)
+    except Exception:
+        pass
+    return None
+
+def _mount_device(dev: str, mount_point: str) -> tuple[bool, str | None]:
+    try:
+        os.makedirs(mount_point, exist_ok=True)
+        # Use sync + umask for permissive writes
+        cp = subprocess.run(["mount", "-o", "sync,umask=000", dev, mount_point], capture_output=True, text=True, timeout=5)
+        if cp.returncode != 0:
+            return False, cp.stderr.strip() or cp.stdout.strip() or "mount failed"
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+def _umount(mount_point: str) -> None:
+    try:
+        subprocess.run(["umount", mount_point], capture_output=True, text=True, timeout=5)
+    except Exception:
+        pass
+
 
 # ---------- PWM logic ----------
 def map_temp_to_pwm(temp: int, thresholds: list[int], pwms: list[int]) -> int:
@@ -1104,11 +1213,11 @@ def api_logs_download():
             info["serial_status"] = get_serial_status(full=True)
         except Exception as e:
             info["serial_status"] = {"error": str(e)}
-        try:
-            vres = _serial_send_line("VERSION?", expect_reply=True)
-            info["controller_version_reply"] = vres.get("reply")
-        except Exception:
-            pass
+    try:
+        vres = _serial_send_line("version", expect_reply=True)
+        info["controller_version_reply"] = vres.get("reply")
+    except Exception:
+        pass
         # mounts (subset)
         try:
             mounts = []
@@ -1170,7 +1279,7 @@ def api_logs_download():
                 lines.append(f"  ports: {', '.join(ports[:12])}{' ...' if len(ports)>12 else ''}")
             cv = diagnostics.get('controller_version_reply')
             if cv:
-                lines.append(f"  controller VERSION?: {cv}")
+                lines.append(f"  controller version: {cv}")
         except Exception:
             pass
         # mounts subset
@@ -1434,6 +1543,162 @@ def api_serial_pwm():
     return jsonify(res), code
 
 
+
+# --------- API: RP status ---------
+@app.get("/api/rp/status")
+def api_rp_status():
+    c = load_config()
+    rp_cfg = c.get("rp", {}) if isinstance(c, dict) else {}
+    repo_url = rp_cfg.get("repo_url") or DEFAULT_CONFIG["rp"]["repo_url"]
+    board = rp_cfg.get("board") or "rp2040"
+
+    # Serial + controller version
+    sstat = get_serial_status(full=True)
+    ver = None
+    if sstat.get("connected"):
+        try:
+            vres = _serial_send_line("version", expect_reply=True, timeout=0.5)
+            if vres.get("ok"):
+                ver = (vres.get("reply") or "").strip() or None
+        except Exception:
+            pass
+    usb = _usb_info_for_port(sstat.get("preferred"))
+
+    # Try to fetch repo manifest (optional)
+    manifest_url = repo_url.rstrip("/") + "/manifest.json"
+    manifest = _http_get_json(manifest_url)
+    latest = None
+    update_available = False
+    if isinstance(manifest, dict) and isinstance(manifest.get("items"), list):
+        latest = _select_latest_for_board(manifest.get("items"), board)
+        if latest and ver:
+            try:
+                update_available = str(latest.get("version")) != str(ver)
+            except Exception:
+                update_available = False
+
+    payload = {
+        "ok": True,
+        "privileged": _has_cap_sys_admin(),
+        "serial": sstat,
+        "usb": usb,
+        "controller_version": ver,
+        "repo_url": repo_url,
+        "board": board,
+        "manifest_url": manifest_url,
+        "latest": latest,
+        "update_available": bool(update_available),
+    }
+    return jsonify(payload)
+
+
+# --------- API: Set RP repo URL ---------
+@app.post("/api/rp/repo")
+def api_rp_repo():
+    data = request.get_json(force=True, silent=True) or {}
+    url = (data.get("repo_url") or "").strip()
+    if not url:
+        return jsonify({"ok": False, "error": "missing repo_url"}), 400
+    c = load_config()
+    if "rp" not in c or not isinstance(c["rp"], dict):
+        c["rp"] = {}
+    c["rp"]["repo_url"] = url
+    try:
+        save_config(c)
+    except Exception:
+        pass
+    try:
+        _audit("rp.repo.update", repo_url=url)
+    except Exception:
+        pass
+    return jsonify({"ok": True, "repo_url": url})
+
+
+# --------- API: Flash latest firmware ---------
+@app.post("/api/rp/flash")
+def api_rp_flash():
+    data = request.get_json(force=True, silent=True) or {}
+    board = (data.get("board") or "rp2040").strip()
+    version = (data.get("version") or "").strip() or None
+    # Ensure we have serial connection to trigger BOOTSEL
+    sstat = get_serial_status(full=True)
+    if not sstat.get("connected"):
+        return jsonify({"ok": False, "error": "controller not connected"}), 400
+
+    c = load_config()
+    rp_cfg = c.get("rp", {}) if isinstance(c, dict) else {}
+    repo_url = rp_cfg.get("repo_url") or DEFAULT_CONFIG["rp"]["repo_url"]
+
+    # Fetch manifest to determine URL
+    manifest_url = repo_url.rstrip("/") + "/manifest.json"
+    manifest = _http_get_json(manifest_url)
+    if not (isinstance(manifest, dict) and isinstance(manifest.get("items"), list)):
+        return jsonify({"ok": False, "error": "manifest not available"}), 400
+    item = None
+    if version:
+        for it in manifest.get("items"):
+            if str(it.get("board")).lower() == board.lower() and str(it.get("version")) == version:
+                item = it; break
+    else:
+        item = _select_latest_for_board(manifest.get("items"), board)
+    if not item or not item.get("url"):
+        return jsonify({"ok": False, "error": "firmware not found for board/version"}), 404
+
+    fw_url = str(item.get("url"))
+
+    # 1) Reboot controller into BOOTSEL
+    _serial_send_line("BOOTSEL", expect_reply=False)
+    # 2) Poll for RPI-RP2 device
+    dev = None
+    deadline = time.time() + 20.0
+    while time.time() < deadline:
+        dev = _find_rp2_dev_symlink()
+        if dev:
+            break
+        time.sleep(0.5)
+    if not dev:
+        return jsonify({"ok": False, "error": "RPI-RP2 device not detected (is container privileged?)"}), 503
+
+    # 3) Mount, download, copy UF2, unmount
+    mnt = tempfile.mkdtemp(prefix="rp2-")
+    ok, err = _mount_device(dev, mnt)
+    if not ok:
+        try: shutil.rmtree(mnt, ignore_errors=True)
+        except Exception: pass
+        return jsonify({"ok": False, "error": f"mount failed: {err}"}), 503
+    tmp_uf2 = None
+    try:
+        # Download to temp file
+        tmp_fd, tmp_path = tempfile.mkstemp(prefix="fw-", suffix=".uf2")
+        os.close(tmp_fd)
+        tmp_uf2 = tmp_path
+        try:
+            req = urllib.request.Request(fw_url, headers={"User-Agent": "fanbridge/1.0"})
+            with urllib.request.urlopen(req, timeout=20) as resp, open(tmp_path, "wb") as wf:
+                shutil.copyfileobj(resp, wf)
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"download failed: {e}"}), 502
+        # Copy to mounted volume (any filename is fine)
+        dst = os.path.join(mnt, os.path.basename(tmp_path) or "update.uf2")
+        try:
+            shutil.copy2(tmp_path, dst)
+            # give ROM time to program before unmount
+            time.sleep(1.0)
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"copy failed: {e}"}), 503
+        return jsonify({"ok": True, "device": dev, "mount": mnt, "url": fw_url, "version": item.get("version")})
+    finally:
+        try:
+            _umount(mnt)
+        except Exception:
+            pass
+        try:
+            shutil.rmtree(mnt, ignore_errors=True)
+        except Exception:
+            pass
+        if tmp_uf2:
+            try: os.remove(tmp_uf2)
+            except Exception: pass
 
 # --------- API: Exclude device ---------
 @app.post("/api/exclude")

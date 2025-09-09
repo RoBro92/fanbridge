@@ -1,8 +1,8 @@
 poll_interval_seconds: 7
 hdd_thresholds:
 - 30
-- 34
-- 36
+- 32
+- 35
 - 38
 - 40
 - 42
@@ -35,8 +35,8 @@ ssd_pwm:
 - 70
 - 85
 - 100
-single_override_hdd_c: 40
-single_override_ssd_c: 70
+single_override_hdd_c: 45
+single_override_ssd_c: 60
 override_pwm: 100
 fallback_pwm: 10
 pwm_hysteresis: 3
@@ -62,5 +62,8 @@ sim:
     temp: 41
 auto_apply: true
 auto_apply_min_interval_s: 3
-auto_apply_hysteresis_duty: 3
+auto_apply_hysteresis_duty: 5
+rp:
+  repo_url: https://raw.githubusercontent.com/RoBro92/fanbridge-firmware/main
+  board: rp2040
 log_level: INFO

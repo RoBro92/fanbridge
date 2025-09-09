@@ -328,7 +328,7 @@
         <div class="serial-row" style="margin-bottom:8px;">
           <button id="btnPing">PING</button>
           <button id="btnTest">TEST</button>
-          <button id="btnVer">VERSION?</button>
+          <button id="btnVer">version</button>
           <button id="btnStat">STATUS?</button>
         </div>
 
@@ -351,6 +351,43 @@
       <div class="serial-box">
         <h3>Console</h3>
         <div id="serialConsole" class="serial-console" aria-live="polite" aria-atomic="false"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2 style="margin:0 0 10px; display:flex; align-items:center; gap:10px;">
+      RP Updates
+      <span id="rpPriv" class="pill small" title="Container privileges">privileged: …</span>
+      <span id="rpUpd" class="pill small" title="Update availability">update: …</span>
+    </h2>
+    <div class="serial-grid">
+      <div class="serial-box">
+        <h3>Device</h3>
+        <div class="small">
+          <div>Port: <span id="rpPort">—</span></div>
+          <div>USB: <span id="rpUsb">—</span></div>
+          <div>Manufacturer: <span id="rpMan">—</span></div>
+          <div>Product: <span id="rpProd">—</span></div>
+          <div>Serial: <span id="rpSer">—</span></div>
+          <div>Controller version: <span id="rpVer">—</span></div>
+        </div>
+      </div>
+      <div class="serial-box">
+        <h3>Repository</h3>
+        <div class="serial-row" style="margin-bottom:8px;">
+          <input type="text" id="rpRepoUrl" placeholder="https://…/manifest.json base" />
+          <button id="rpSaveRepo">Save URL</button>
+        </div>
+        <div class="small">
+          <div>Board: <span id="rpBoard">rp2040</span></div>
+          <div>Latest: <span id="rpLatest">—</span></div>
+          <div>Manifest: <a id="rpManifest" href="#" target="_blank" rel="noopener">—</a></div>
+        </div>
+        <div class="serial-row" style="margin-top:10px;">
+          <button id="rpFlashLatest">Install latest</button>
+        </div>
+        <div id="rpWarn" class="warnmsg small" style="display:none;"></div>
       </div>
     </div>
   </div>
@@ -455,6 +492,7 @@
       try { localStorage.setItem('fanbridgeTab', name); } catch(e){}
       // Trigger immediate updates on tab switch
       try { if (name === 'serial' && typeof refreshSerial === 'function') refreshSerial(); } catch(e){}
+      try { if (name === 'serial' && typeof refreshRp === 'function') refreshRp(); } catch(e){}
       try { if (name === 'logs') startLogs(); else stopLogs(); } catch(e){}
     }
     document.querySelectorAll('.tabs .tab[data-tab]').forEach(b=>{
@@ -539,6 +577,56 @@
         el.title = 'Failed to query /api/serial/status';
         el.classList.remove('warn');
         el.classList.add('error');
+      }
+    }
+
+    // RP status updater
+    async function refreshRp(){
+      const priv = document.getElementById('rpPriv');
+      const upd  = document.getElementById('rpUpd');
+      const port = document.getElementById('rpPort');
+      const usb  = document.getElementById('rpUsb');
+      const man  = document.getElementById('rpMan');
+      const prod = document.getElementById('rpProd');
+      const ser  = document.getElementById('rpSer');
+      const ver  = document.getElementById('rpVer');
+      const repo = document.getElementById('rpRepoUrl');
+      const board= document.getElementById('rpBoard');
+      const latest = document.getElementById('rpLatest');
+      const manifest = document.getElementById('rpManifest');
+      const warn = document.getElementById('rpWarn');
+      try{
+        warn.style.display='none'; warn.textContent='';
+      }catch(e){}
+      try {
+        const r = await fetch('/api/rp/status', { cache: 'no-store' });
+        const j = await r.json();
+        if (priv){
+          priv.textContent = 'privileged: ' + (j.privileged ? 'yes' : 'no');
+          priv.className = 'pill small ' + (j.privileged ? 'ok' : 'warn');
+        }
+        if (upd){
+          upd.textContent = 'update: ' + (j.update_available ? 'available' : 'none');
+          upd.className = 'pill small ' + (j.update_available ? 'warn' : '');
+          upd.title = j.latest && j.latest.version && j.controller_version ? (`latest ${j.latest.version} vs current ${j.controller_version}`) : '';
+        }
+        if (port) port.textContent = fmt(j.serial && j.serial.preferred);
+        const u = j.usb || {};
+        if (usb) usb.textContent = (u.vid && u.pid) ? `vid:pid ${u.vid}:${u.pid}` : '—';
+        if (man) man.textContent = fmt(u.manufacturer);
+        if (prod) prod.textContent = fmt(u.product);
+        if (ser) ser.textContent = fmt(u.serial_number);
+        if (ver) ver.textContent = fmt(j.controller_version);
+        if (repo) repo.value = j.repo_url || repo.value || '';
+        if (board) board.textContent = j.board || 'rp2040';
+        if (latest) latest.textContent = j.latest ? `${j.latest.board}-${j.latest.version}` : '—';
+        if (manifest){ manifest.textContent = j.manifest_url || '—'; manifest.href = j.manifest_url || '#'; }
+        if (!j.privileged){
+          if (warn){ warn.style.display=''; warn.textContent='Container is not privileged; flashing may fail to detect/mount RPI-RP2.'; }
+        }
+      } catch(e){
+        if (priv){ priv.textContent = 'privileged: ?'; priv.className='pill small'; }
+        if (upd){ upd.textContent='update: ?'; upd.className='pill small'; }
       }
     }
     const fmt = (v) => (v === null || v === undefined) ? "—" : v;
@@ -1214,6 +1302,46 @@ function applyValidation(){
     })();
   </script>
   <script>
+    // RP repo controls and flash
+    (function(){
+      const saveBtn = document.getElementById('rpSaveRepo');
+      const urlEl = document.getElementById('rpRepoUrl');
+      const flashBtn = document.getElementById('rpFlashLatest');
+      const warn = document.getElementById('rpWarn');
+      async function saveRepo(){
+        if (!urlEl || !urlEl.value) return;
+        try{
+          const r = await fetch('/api/rp/repo', { method:'POST', headers: { 'Content-Type':'application/json', 'X-CSRF-Token': CSRF }, body: JSON.stringify({ repo_url: urlEl.value }) });
+          const j = await r.json().catch(()=>({}));
+          if (!r.ok || !j.ok){ showToast('Failed to save repo URL', 'error'); return; }
+          showToast('Saved repo URL', 'ok');
+          refreshRp();
+        }catch(e){ showToast('Failed to save repo URL', 'error'); }
+      }
+      async function flashLatest(){
+        if (warn){ warn.style.display='none'; warn.textContent=''; }
+        // Confirm
+        if (!confirm('Put RP2040 into BOOTSEL and flash latest firmware? This will reboot the controller.')) return;
+        try{
+          flashBtn.disabled = true; flashBtn.textContent = 'Flashing…';
+          const r = await fetch('/api/rp/flash', { method:'POST', headers: { 'Content-Type':'application/json', 'X-CSRF-Token': CSRF }, body: JSON.stringify({}) });
+          const j = await r.json().catch(()=>({}));
+          if (!r.ok || !j.ok){
+            const msg = j.error || 'Flash failed';
+            if (warn){ warn.style.display=''; warn.textContent = msg; }
+            showToast(msg, 'error');
+            return;
+          }
+          showToast('Flashed firmware ' + (j.version || ''), 'ok');
+        }catch(e){ showToast('Flash failed', 'error'); }
+        finally{ flashBtn.disabled = false; flashBtn.textContent = 'Install latest'; setTimeout(refreshRp, 1500); }
+      }
+      if (saveBtn) saveBtn.addEventListener('click', saveRepo);
+      if (urlEl) urlEl.addEventListener('keydown', (ev)=>{ if (ev.key === 'Enter') saveRepo(); });
+      if (flashBtn) flashBtn.addEventListener('click', flashLatest);
+    })();
+  </script>
+  <script>
   // ---- Serial helpers (UI -> API) ----
   function serialTs(){ const d=new Date(); return d.toLocaleTimeString(); }
   function scAppend(type, text){
@@ -1276,7 +1404,7 @@ function applyValidation(){
 
     if (btnPing) btnPing.addEventListener('click', ()=> apiSerialSend('PING'));
     if (btnTest) btnTest.addEventListener('click', ()=> apiSerialSend('TEST'));
-    if (btnVer)  btnVer .addEventListener('click', ()=> apiSerialSend('VERSION?'));
+    if (btnVer)  btnVer .addEventListener('click', ()=> apiSerialSend('version'));
     if (btnStat) btnStat.addEventListener('click', ()=> apiSerialSend('STATUS?'));
 
     if (btnSend) btnSend.addEventListener('click', ()=>{

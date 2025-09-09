@@ -19,3 +19,8 @@ sim:
     - { name: sda, type: HDD, temp: 33 }
     - { name: sdb, type: HDD, temp: 36 }
     - { name: nvme0n1, type: SSD, temp: 40 }
+
+# RP firmware update (UI can change repo_url)
+rp:
+  repo_url: https://raw.githubusercontent.com/RoBro92/fanbridge-link/main
+  board: rp2040
