@@ -295,6 +295,9 @@ USERS_PATH = "/config/users.yml" if _in_docker() else str((_BASE / "users.local.
 SERIAL_PREF = os.environ.get("FANBRIDGE_SERIAL_PORT", "").strip() or ("" if _in_docker() else _local_default_serial_port())
 SERIAL_BAUD = int(os.environ.get("FANBRIDGE_SERIAL_BAUD", "115200") or "115200")
 
+# Remember the last successfully opened port to survive re-enumeration (e.g., ACM0→ACM1)
+_SERIAL_LAST_GOOD: str | None = None
+
 try:
     if _should_log_startup():
         log.info(
@@ -645,7 +648,7 @@ def probe_serial_open(port: str, baud: int | None = None):
     # Build serial status for /api/serial/status and embed in /api/status.
 def get_serial_status(full: bool = True):
     ports = list_serial_ports()
-    preferred = SERIAL_PREF if SERIAL_PREF else (ports[0] if ports else "")
+    preferred = _preferred_serial_port()
     available = bool(ports)
     connected = False
     message = "no ports detected"
@@ -654,13 +657,28 @@ def get_serial_status(full: bool = True):
         ok, msg = probe_serial_open(preferred, SERIAL_BAUD)
         connected = ok
         message = msg
-        if not ok:
+        if not ok and available:
+            # try any other port
+            for p in ports:
+                if p == preferred:
+                    continue
+                o2, m2 = probe_serial_open(p, SERIAL_BAUD)
+                if o2:
+                    preferred = p
+                    connected = True
+                    message = m2
+                    try:
+                        globals()["_SERIAL_LAST_GOOD"] = p
+                    except Exception:
+                        pass
+                    break
+        if not connected:
             try:
-                lvl = logging.WARNING if any(s in str(msg).lower() for s in ("denied", "permission", "not opened", "busy")) else logging.INFO
+                lvl = logging.WARNING if any(s in str(message).lower() for s in ("denied", "permission", "not opened", "busy", "no such device")) else logging.INFO
                 logging.getLogger("fanbridge").log(
                     lvl,
                     "serial not connected | port=%s baud=%s reason=%s (map device and grant permissions)",
-                    preferred, SERIAL_BAUD, msg,
+                    preferred, SERIAL_BAUD, message,
                 )
             except Exception:
                 pass
@@ -696,33 +714,67 @@ _AUTO_PAUSED_MSG: str | None = None
 # ---------- Serial send helpers used by API ----------
 #
 # get currently preferred port (same logic as get_serial_status)
+def _choose_best_port(candidates: list[str]) -> str:
+    # Prefer stable by-id links if present
+    byid = [p for p in candidates if "/serial/by-id/" in p]
+    if byid:
+        return byid[0]
+    return candidates[0] if candidates else ""
+
 def _preferred_serial_port() -> str:
     ports = list_serial_ports()
-    if SERIAL_PREF:
+    # If last good is still present, stick to it
+    if globals().get("_SERIAL_LAST_GOOD") and globals()["_SERIAL_LAST_GOOD"] in ports:
+        return str(globals()["_SERIAL_LAST_GOOD"])  # type: ignore
+    # If env preference exists and is present, use it, else fall back to best available
+    if SERIAL_PREF and os.path.exists(SERIAL_PREF):
         return SERIAL_PREF
-    return ports[0] if ports else ""
+    return _choose_best_port(ports)
 
 # --- change this signature (around the _open_serial definition) ---
 def _open_serial(port: str | None = None, baud: int | None = None, timeout: float = 1.0) -> tuple[SerialProto | None, str | None]:
     # returns (ser, error_message_or_None)
     if serial is None:
         return None, "pyserial not available"
-    p = (port or _preferred_serial_port() or "").strip()
-    if not p:
-        return None, "no serial ports detected"
-    try:
-        s = serial.Serial(port=p, baudrate=baud or SERIAL_BAUD, timeout=timeout)  # <-- use passed timeout
-        s_proto: SerialProto = s  # structural typing for Pylance
+    # Build a small candidate list to tolerate re-enumeration
+    ports = list_serial_ports()
+    cand = []
+    if port:
+        cand.append(port)
+    pref = _preferred_serial_port()
+    if pref:
+        cand.append(pref)
+    cand.extend(ports)
+    tried = set()
+    for p in _unique_order(cand):
+        if not p or p in tried:
+            continue
+        tried.add(p)
         try:
-            s_proto.reset_input_buffer()
-            s_proto.reset_output_buffer()
-        except Exception:
-            pass
-        return s_proto, None
-    except Exception as e:
-        msg = str(e)
-        log.warning("serial open failed | port=%s baud=%s err=%s", p, baud or SERIAL_BAUD, msg)
-        return None, msg
+            s = serial.Serial(port=p, baudrate=baud or SERIAL_BAUD, timeout=timeout)
+            s_proto: SerialProto = s  # structural typing for Pylance
+            try:
+                s_proto.reset_input_buffer()
+                s_proto.reset_output_buffer()
+            except Exception:
+                pass
+            # remember last good
+            try:
+                globals()["_SERIAL_LAST_GOOD"] = getattr(s_proto, "port", p)
+            except Exception:
+                pass
+            return s_proto, None
+        except Exception as e:
+            msg = str(e)
+            # continue trying other candidates on transient errors
+            last_err = msg
+            continue
+    # If we got here, nothing opened
+    try:
+        log.warning("serial open failed | port=%s baud=%s err=%s", (port or pref or ""), baud or SERIAL_BAUD, locals().get("last_err") or "no candidates")
+    except Exception:
+        pass
+    return None, (locals().get("last_err") or "no serial ports detected")
 
 # --- optionally, let _serial_send_line request a shorter timeout ---
 def _serial_send_line(line: str, expect_reply: bool = True, timeout: float = 1.0) -> dict:
@@ -1213,14 +1265,14 @@ def api_logs_download():
             info["serial_status"] = get_serial_status(full=True)
         except Exception as e:
             info["serial_status"] = {"error": str(e)}
-    try:
-        vres = _serial_send_line("version", expect_reply=True)
-        info["controller_version_reply"] = vres.get("reply")
-    except Exception:
-        pass
+        try:
+            vres = _serial_send_line("version", expect_reply=True)
+            info["controller_version_reply"] = vres.get("reply")
+        except Exception:
+            pass
         # mounts (subset)
         try:
-            mounts = []
+            mounts: list[str] = []
             with open("/proc/mounts", "r", encoding="utf-8", errors="ignore") as f:
                 for ln in f.readlines()[:500]:
                     if any(tag in ln for tag in ("/config", "/unraid", "/proc", "/sys", "/")):
@@ -1567,10 +1619,11 @@ def api_rp_status():
     # Try to fetch repo manifest (optional)
     manifest_url = repo_url.rstrip("/") + "/manifest.json"
     manifest = _http_get_json(manifest_url)
-    latest = None
+    latest: dict | None = None
     update_available = False
     if isinstance(manifest, dict) and isinstance(manifest.get("items"), list):
-        latest = _select_latest_for_board(manifest.get("items"), board)
+        items: list[dict] = list(manifest.get("items") or [])
+        latest = _select_latest_for_board(items, board)
         if latest and ver:
             try:
                 update_available = str(latest.get("version")) != str(ver)
@@ -1634,13 +1687,14 @@ def api_rp_flash():
     manifest = _http_get_json(manifest_url)
     if not (isinstance(manifest, dict) and isinstance(manifest.get("items"), list)):
         return jsonify({"ok": False, "error": "manifest not available"}), 400
-    item = None
+    items: list[dict] = list(manifest.get("items") or [])
+    item: dict | None = None
     if version:
-        for it in manifest.get("items"):
+        for it in items:
             if str(it.get("board")).lower() == board.lower() and str(it.get("version")) == version:
                 item = it; break
     else:
-        item = _select_latest_for_board(manifest.get("items"), board)
+        item = _select_latest_for_board(items, board)
     if not item or not item.get("url"):
         return jsonify({"ok": False, "error": "firmware not found for board/version"}), 404
 
@@ -1686,7 +1740,19 @@ def api_rp_flash():
             time.sleep(1.0)
         except Exception as e:
             return jsonify({"ok": False, "error": f"copy failed: {e}"}), 503
-        return jsonify({"ok": True, "device": dev, "mount": mnt, "url": fw_url, "version": item.get("version")})
+        # After flashing, wait for CDC device to re-enumerate and try to read version
+        re_ver = None
+        t_end = time.time() + 20.0
+        while time.time() < t_end:
+            try:
+                res = _serial_send_line("version", expect_reply=True, timeout=0.5)
+                if res.get("ok") and res.get("reply"):
+                    re_ver = (res.get("reply") or "").strip() or None
+                    break
+            except Exception:
+                pass
+            time.sleep(0.5)
+        return jsonify({"ok": True, "device": dev, "mount": mnt, "url": fw_url, "version": item.get("version"), "controller_version": re_ver})
     finally:
         try:
             _umount(mnt)
