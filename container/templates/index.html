@@ -357,7 +357,7 @@
 
   <div class="panel">
     <h2 style="margin:0 0 10px; display:flex; align-items:center; gap:10px;">
-      RP Updates
+      Link Updates
       <span id="rpPriv" class="pill small" title="Container privileges">privileged: …</span>
       <span id="rpUpd" class="pill small" title="Update availability">update: …</span>
     </h2>
@@ -432,6 +432,33 @@
         <span class="small muted">Download uses current view’s minimum level and optional time window.</span>
       </div>
       <div id="logbox" class="serial-console" style="height:320px;"></div>
+    </div>
+  </div>
+
+  <!-- Modal: RP Flash Confirm -->
+  <div id="rpFlashConfirm" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); align-items:center; justify-content:center; z-index:1100;">
+    <div style="background: var(--cardbg); color: var(--fg); border:1px solid var(--border); border-radius:10px; padding:16px; width: min(520px, 92vw); box-shadow: 0 10px 30px rgba(0,0,0,.3);">
+      <h3 style="margin:0 0 10px;">Install latest firmware</h3>
+      <p class="small" style="margin:0 0 10px; color:var(--muted);">
+        The controller will reboot into BOOTSEL mode, the UF2 will be copied, and then it will reconnect. Do not unplug it during the process.
+      </p>
+      <div style="display:flex; gap:10px; justify-content:flex-end;">
+        <button id="rpFlashCancel">Cancel</button>
+        <button id="rpFlashConfirmBtn">Install</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: RP Flash Progress -->
+  <div id="rpFlashProgress" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); align-items:center; justify-content:center; z-index:1200;">
+    <div style="background: var(--cardbg); color: var(--fg); border:1px solid var(--border); border-radius:10px; padding:16px; width: min(720px, 96vw); box-shadow: 0 10px 30px rgba(0,0,0,.3);">
+      <h3 style="margin:0 0 10px;">Firmware update</h3>
+      <div id="rpProgLog" class="serial-console" style="height:280px;">
+        <div class="line">Preparing…</div>
+      </div>
+      <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:10px;">
+        <button id="rpProgClose" disabled>Close</button>
+      </div>
     </div>
   </div>
 
@@ -1308,6 +1335,28 @@ function applyValidation(){
       const urlEl = document.getElementById('rpRepoUrl');
       const flashBtn = document.getElementById('rpFlashLatest');
       const warn = document.getElementById('rpWarn');
+      const confirmModal = document.getElementById('rpFlashConfirm');
+      const confirmBtn = document.getElementById('rpFlashConfirmBtn');
+      const cancelBtn = document.getElementById('rpFlashCancel');
+      const progModal = document.getElementById('rpFlashProgress');
+      const progBox = document.getElementById('rpProgLog');
+      const progClose = document.getElementById('rpProgClose');
+
+      function openConfirm(){ if (confirmModal) { confirmModal.style.display = 'flex'; } }
+      function closeConfirm(){ if (confirmModal) { confirmModal.style.display = 'none'; } }
+      function openProgress(){ if (progModal) { progModal.style.display = 'flex'; } }
+      function closeProgress(){ if (progModal) { progModal.style.display = 'none'; } }
+      function progAppend(text, type){
+        if (!progBox) return;
+        const line = document.createElement('div');
+        const ts = new Date().toLocaleTimeString();
+        line.className = 'line ' + (type || '');
+        line.textContent = `[${ts}] ${text}`;
+        progBox.appendChild(line);
+        progBox.scrollTop = progBox.scrollHeight;
+      }
+      function bindClose(){ if (progClose){ progClose.disabled = false; progClose.addEventListener('click', ()=>{ closeProgress(); refreshRp(); }); } }
+
       async function saveRepo(){
         if (!urlEl || !urlEl.value) return;
         try{
@@ -1320,25 +1369,44 @@ function applyValidation(){
       }
       async function flashLatest(){
         if (warn){ warn.style.display='none'; warn.textContent=''; }
-        // Confirm
-        if (!confirm('Put RP2040 into BOOTSEL and flash latest firmware? This will reboot the controller.')) return;
+        openConfirm();
+      }
+      async function doFlash(){
+        closeConfirm();
+        openProgress();
+        if (progBox) progBox.innerHTML = '';
+        progAppend('Starting firmware update…');
         try{
           flashBtn.disabled = true; flashBtn.textContent = 'Flashing…';
           const r = await fetch('/api/rp/flash', { method:'POST', headers: { 'Content-Type':'application/json', 'X-CSRF-Token': CSRF }, body: JSON.stringify({}) });
           const j = await r.json().catch(()=>({}));
+          const steps = (j && Array.isArray(j.progress)) ? j.progress : [];
+          for (const s of steps){
+            const ok = (s.ok === undefined) ? '' : (s.ok ? 'ok' : 'error');
+            const extra = (()=>{
+              const keys = Object.keys(s).filter(k=>!['ts','msg','ok'].includes(k));
+              if (!keys.length) return '';
+              return ' ' + keys.map(k=>`${k}=${s[k]}`).join(' ');
+            })();
+            progAppend(`${s.msg}${extra}`, ok);
+          }
           if (!r.ok || !j.ok){
             const msg = j.error || 'Flash failed';
-            if (warn){ warn.style.display=''; warn.textContent = msg; }
+            progAppend('ERROR: ' + msg, 'error');
             showToast(msg, 'error');
-            return;
+          } else {
+            progAppend('Firmware update complete. You may now close this window.', 'ok');
+            showToast('Flashed firmware ' + (j.version || ''), 'ok');
           }
-          showToast('Flashed firmware ' + (j.version || ''), 'ok');
-        }catch(e){ showToast('Flash failed', 'error'); }
-        finally{ flashBtn.disabled = false; flashBtn.textContent = 'Install latest'; setTimeout(refreshRp, 1500); }
+        }catch(e){ progAppend('Unexpected error during flash', 'error'); showToast('Flash failed', 'error'); }
+        finally{ flashBtn.disabled = false; flashBtn.textContent = 'Install latest'; bindClose(); setTimeout(refreshRp, 1500); }
       }
       if (saveBtn) saveBtn.addEventListener('click', saveRepo);
       if (urlEl) urlEl.addEventListener('keydown', (ev)=>{ if (ev.key === 'Enter') saveRepo(); });
       if (flashBtn) flashBtn.addEventListener('click', flashLatest);
+      if (confirmBtn) confirmBtn.addEventListener('click', doFlash);
+      if (cancelBtn) cancelBtn.addEventListener('click', closeConfirm);
+      if (confirmModal) confirmModal.addEventListener('click', (ev)=>{ if (ev.target === confirmModal) closeConfirm(); });
     })();
   </script>
   <script>
