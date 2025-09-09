@@ -1752,128 +1752,136 @@ def api_rp_flash():
         if kv:
             entry.update(kv)
         steps.append(entry)
-    board = (data.get("board") or "rp2040").strip()
-    version = (data.get("version") or "").strip() or None
-    # Ensure we have serial connection to trigger BOOTSEL
-    sstat = get_serial_status(full=True)
-    if not sstat.get("connected"):
-        logstep("controller not connected", ok=False)
-        return jsonify({"ok": False, "error": "controller not connected", "progress": steps}), 400
-
-    c = load_config()
-    rp_cfg = c.get("rp", {}) if isinstance(c, dict) else {}
-    repo_url = rp_cfg.get("repo_url") or DEFAULT_CONFIG["rp"]["repo_url"]
-
-    # Fetch manifest to determine URL
-    manifest_url = repo_url.rstrip("/") + "/manifest.json"
-    logstep("fetching manifest", url=manifest_url)
-    manifest = _http_get_json(manifest_url)
-    if not (isinstance(manifest, dict) and isinstance(manifest.get("items"), list)):
-        logstep("manifest not available", ok=False)
-        return jsonify({"ok": False, "error": "manifest not available", "progress": steps}), 400
-    items: list[dict] = list(manifest.get("items") or [])
-    item: dict | None = None
-    if version:
-        for it in items:
-            if str(it.get("board")).lower() == board.lower() and str(it.get("version")) == version:
-                item = it; break
-    else:
-        item = _select_latest_for_board(items, board)
-    if not item or not item.get("url"):
-        logstep("firmware not found for board/version", ok=False)
-        return jsonify({"ok": False, "error": "firmware not found for board/version", "progress": steps}), 404
-
-    fw_url = str(item.get("url"))
-
-    # 1) Reboot controller into BOOTSEL
-    logstep("sending BOOTSEL")
-    _serial_send_line("BOOTSEL", expect_reply=False)
-    # Small grace period for USB disconnect
-    time.sleep(0.6)
-    # 2) Poll for RPI-RP2 block device (by-label or probed)
-    dev = None
-    deadline = time.time() + 40.0
-    logstep("waiting for RPI-RP2 device")
-    while time.time() < deadline:
-        dev = _find_rp2_dev_symlink() or _find_rp2_block_device()
-        if dev:
-            logstep("found RPI-RP2 device", ok=True, device=dev)
-            break
-        time.sleep(0.6)
-    if not dev:
-        logstep("RPI-RP2 device not detected (is container privileged?)", ok=False)
-        return jsonify({"ok": False, "error": "RPI-RP2 device not detected (is container privileged?)", "progress": steps}), 503
-
-    # 3) Mount, download, copy UF2, unmount
-    mnt = tempfile.mkdtemp(prefix="rp2-")
-    logstep("mounting RP2", mount=mnt)
-    ok, err = _mount_device(dev, mnt)
-    if not ok:
-        try: shutil.rmtree(mnt, ignore_errors=True)
-        except Exception: pass
-        logstep("mount failed", ok=False, error=str(err or "unknown"))
-        return jsonify({"ok": False, "error": f"mount failed: {err}", "progress": steps}), 503
-    tmp_uf2 = None
     try:
-        # Download to temp file
-        tmp_fd, tmp_path = tempfile.mkstemp(prefix="fw-", suffix=".uf2")
-        os.close(tmp_fd)
-        tmp_uf2 = tmp_path
+        board = (data.get("board") or "rp2040").strip()
+        version = (data.get("version") or "").strip() or None
+        # Ensure we have serial connection to trigger BOOTSEL
+        sstat = get_serial_status(full=True)
+        if not sstat.get("connected"):
+            logstep("controller not connected", ok=False)
+            return jsonify({"ok": False, "error": "controller not connected", "progress": steps}), 400
+
+        c = load_config()
+        rp_cfg = c.get("rp", {}) if isinstance(c, dict) else {}
+        repo_url = rp_cfg.get("repo_url") or DEFAULT_CONFIG["rp"]["repo_url"]
+
+        # Fetch manifest to determine URL
+        manifest_url = repo_url.rstrip("/") + "/manifest.json"
+        logstep("fetching manifest", url=manifest_url)
+        manifest = _http_get_json(manifest_url)
+        if not (isinstance(manifest, dict) and isinstance(manifest.get("items"), list)):
+            logstep("manifest not available", ok=False)
+            return jsonify({"ok": False, "error": "manifest not available", "progress": steps}), 400
+        items: list[dict] = list(manifest.get("items") or [])
+        item: dict | None = None
+        if version:
+            for it in items:
+                if str(it.get("board")).lower() == board.lower() and str(it.get("version")) == version:
+                    item = it; break
+        else:
+            item = _select_latest_for_board(items, board)
+        if not item or not item.get("url"):
+            logstep("firmware not found for board/version", ok=False)
+            return jsonify({"ok": False, "error": "firmware not found for board/version", "progress": steps}), 404
+
+        fw_url = str(item.get("url"))
+
+        # 1) Reboot controller into BOOTSEL
+        logstep("sending BOOTSEL")
+        _serial_send_line("BOOTSEL", expect_reply=False)
+        # Small grace period for USB disconnect
+        time.sleep(0.6)
+        # 2) Poll for RPI-RP2 block device (by-label or probed)
+        dev = None
+        deadline = time.time() + 40.0
+        logstep("waiting for RPI-RP2 device")
+        while time.time() < deadline:
+            dev = _find_rp2_dev_symlink() or _find_rp2_block_device()
+            if dev:
+                logstep("found RPI-RP2 device", ok=True, device=dev)
+                break
+            time.sleep(0.6)
+        if not dev:
+            logstep("RPI-RP2 device not detected (is container privileged?)", ok=False)
+            return jsonify({"ok": False, "error": "RPI-RP2 device not detected (is container privileged?)", "progress": steps}), 503
+
+        # 3) Mount, download, copy UF2, unmount
+        mnt = tempfile.mkdtemp(prefix="rp2-")
+        logstep("mounting RP2", mount=mnt)
+        ok, err = _mount_device(dev, mnt)
+        if not ok:
+            try: shutil.rmtree(mnt, ignore_errors=True)
+            except Exception: pass
+            logstep("mount failed", ok=False, error=str(err or "unknown"))
+            return jsonify({"ok": False, "error": f"mount failed: {err}", "progress": steps}), 503
+        tmp_uf2 = None
         try:
-            logstep("downloading UF2", url=fw_url)
-            req = urllib.request.Request(fw_url, headers={"User-Agent": "fanbridge/1.0"})
-            with urllib.request.urlopen(req, timeout=20) as resp, open(tmp_path, "wb") as wf:
-                shutil.copyfileobj(resp, wf)
-        except Exception as e:
-            logstep("download failed", ok=False, error=str(e))
-            return jsonify({"ok": False, "error": f"download failed: {e}", "progress": steps}), 502
-        # Copy to mounted volume (any filename is fine)
-        dst = os.path.join(mnt, os.path.basename(tmp_path) or "update.uf2")
-        try:
-            size = os.path.getsize(tmp_path)
-            logstep("copying UF2 to RP2", bytes=size, dst=dst)
-            shutil.copy2(tmp_path, dst)
-            # give ROM time to program before unmount
-            time.sleep(1.0)
-        except Exception as e:
-            logstep("copy failed", ok=False, error=str(e))
-            return jsonify({"ok": False, "error": f"copy failed: {e}", "progress": steps}), 503
-        # After flashing, wait for CDC device to re-enumerate and try to read version
-        re_ver = None
-        logstep("waiting for device to re-enumerate")
-        t_end = time.time() + 30.0
-        while time.time() < t_end:
+            # Download to temp file
+            tmp_fd, tmp_path = tempfile.mkstemp(prefix="fw-", suffix=".uf2")
+            os.close(tmp_fd)
+            tmp_uf2 = tmp_path
             try:
-                res = _serial_send_line("version", expect_reply=True, timeout=0.5)
-                if res.get("ok") and res.get("reply"):
-                    re_ver = (res.get("reply") or "").strip() or None
-                    logstep("controller version read", ok=True, version=re_ver)
-                    break
+                logstep("downloading UF2", url=fw_url)
+                req = urllib.request.Request(fw_url, headers={"User-Agent": "fanbridge/1.0"})
+                with urllib.request.urlopen(req, timeout=20) as resp, open(tmp_path, "wb") as wf:
+                    shutil.copyfileobj(resp, wf)
+            except Exception as e:
+                logstep("download failed", ok=False, error=str(e))
+                return jsonify({"ok": False, "error": f"download failed: {e}", "progress": steps}), 502
+            # Copy to mounted volume (any filename is fine)
+            dst = os.path.join(mnt, os.path.basename(tmp_path) or "update.uf2")
+            try:
+                size = os.path.getsize(tmp_path)
+                logstep("copying UF2 to RP2", bytes=size, dst=dst)
+                shutil.copy2(tmp_path, dst)
+                # give ROM time to program before unmount
+                time.sleep(1.0)
+            except Exception as e:
+                logstep("copy failed", ok=False, error=str(e))
+                return jsonify({"ok": False, "error": f"copy failed: {e}", "progress": steps}), 503
+            # After flashing, wait for CDC device to re-enumerate and try to read version
+            re_ver = None
+            logstep("waiting for device to re-enumerate")
+            t_end = time.time() + 30.0
+            while time.time() < t_end:
+                try:
+                    res = _serial_send_line("version", expect_reply=True, timeout=0.5)
+                    if res.get("ok") and res.get("reply"):
+                        re_ver = (res.get("reply") or "").strip() or None
+                        logstep("controller version read", ok=True, version=re_ver)
+                        break
+                except Exception:
+                    pass
+                time.sleep(0.5)
+            # Try a quick PING
+            ping_ok = None
+            try:
+                pres = _serial_send_line("PING", expect_reply=True, timeout=0.6)
+                ping_ok = (pres.get("reply") == "PONG")
+                logstep("ping test", ok=bool(ping_ok), reply=pres.get("reply"))
+            except Exception as e:
+                logstep("ping test error", ok=False, error=str(e))
+            logstep("finished", ok=True)
+            return jsonify({"ok": True, "device": dev, "mount": mnt, "url": fw_url, "version": item.get("version"), "controller_version": re_ver, "progress": steps})
+        finally:
+            try:
+                _umount(mnt)
             except Exception:
                 pass
-            time.sleep(0.5)
-        # Try a quick PING
-        ping_ok = None
+            try:
+                shutil.rmtree(mnt, ignore_errors=True)
+            except Exception:
+                pass
+            if tmp_uf2:
+                try: os.remove(tmp_uf2)
+                except Exception: pass
+    except Exception as e:
+        # Surface unexpected exceptions to the progress log and client
         try:
-            pres = _serial_send_line("PING", expect_reply=True, timeout=0.6)
-            ping_ok = (pres.get("reply") == "PONG")
-            logstep("ping test", ok=bool(ping_ok), reply=pres.get("reply"))
-        except Exception as e:
-            logstep("ping test error", ok=False, error=str(e))
-        logstep("finished", ok=True)
-        return jsonify({"ok": True, "device": dev, "mount": mnt, "url": fw_url, "version": item.get("version"), "controller_version": re_ver, "progress": steps})
-    finally:
-        try:
-            _umount(mnt)
+            logstep("unexpected error", ok=False, error=str(e))
         except Exception:
             pass
-        try:
-            shutil.rmtree(mnt, ignore_errors=True)
-        except Exception:
-            pass
-        if tmp_uf2:
-            try: os.remove(tmp_uf2)
-            except Exception: pass
+        return jsonify({"ok": False, "error": str(e), "progress": steps}), 500
 
 # --------- API: Exclude device ---------
 @app.post("/api/exclude")
