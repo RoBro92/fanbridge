@@ -1814,25 +1814,25 @@ def api_rp_flash():
         _serial_send_line("BOOTSEL", expect_reply=False)
         # Small grace period for USB disconnect
         time.sleep(0.6)
-    # 2) Poll for RPI-RP2 block device (preferred path, by-label or probed)
-    dev = None
-    deadline = time.time() + 40.0
-    logstep("waiting for RPI-RP2 device")
-    while time.time() < deadline:
-        # Preferred path from config, if present
-        try:
-            c2 = load_config()
-            pref_dev = (c2.get("rp", {}) or {}).get("rp2_device") if isinstance(c2, dict) else ""
-            if pref_dev and os.path.exists(pref_dev) and _is_block_device(pref_dev):
-                dev = str(pref_dev)
-        except Exception:
-            pass
-        if not dev:
-            dev = _find_rp2_dev_symlink() or _find_rp2_block_device()
-        if dev:
-            logstep("found RPI-RP2 device", ok=True, device=dev)
-            break
-        time.sleep(0.6)
+        # 2) Poll for RPI-RP2 block device (preferred path, by-label or probed)
+        dev = None
+        deadline = time.time() + 40.0
+        logstep("waiting for RPI-RP2 device")
+        while time.time() < deadline:
+            # Preferred path from config, if present
+            try:
+                c2 = load_config()
+                pref_dev = (c2.get("rp", {}) or {}).get("rp2_device") if isinstance(c2, dict) else ""
+                if pref_dev and os.path.exists(pref_dev) and _is_block_device(pref_dev):
+                    dev = str(pref_dev)
+            except Exception:
+                pass
+            if not dev:
+                dev = _find_rp2_dev_symlink() or _find_rp2_block_device()
+            if dev:
+                logstep("found RPI-RP2 device", ok=True, device=dev)
+                break
+            time.sleep(0.6)
         if not dev:
             logstep("RPI-RP2 device not detected (is container privileged?)", ok=False)
             return jsonify({"ok": False, "error": "RPI-RP2 device not detected (is container privileged?)", "progress": steps}), 503
