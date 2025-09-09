@@ -1341,6 +1341,8 @@ function applyValidation(){
       const progModal = document.getElementById('rpFlashProgress');
       const progBox = document.getElementById('rpProgLog');
       const progClose = document.getElementById('rpProgClose');
+      const rp2DevEl = document.getElementById('rp2Device');
+      const rp2SaveBtn = document.getElementById('rpSaveDevice');
 
       function openConfirm(){ if (confirmModal) { confirmModal.style.display = 'flex'; } }
       function closeConfirm(){ if (confirmModal) { confirmModal.style.display = 'none'; } }
@@ -1366,6 +1368,15 @@ function applyValidation(){
           showToast('Saved repo URL', 'ok');
           refreshRp();
         }catch(e){ showToast('Failed to save repo URL', 'error'); }
+      }
+      async function saveDevice(){
+        if (!rp2DevEl) return;
+        try{
+          const r = await fetch('/api/rp/rp2_device', { method:'POST', headers: { 'Content-Type':'application/json', 'X-CSRF-Token': CSRF }, body: JSON.stringify({ rp2_device: rp2DevEl.value||'' }) });
+          const j = await r.json().catch(()=>({}));
+          if (!r.ok || !j.ok){ showToast('Failed to save device', 'error'); return; }
+          showToast('Saved device path', 'ok');
+        }catch(e){ showToast('Failed to save device', 'error'); }
       }
       async function flashLatest(){
         if (warn){ warn.style.display='none'; warn.textContent=''; }
@@ -1404,6 +1415,7 @@ function applyValidation(){
       }
       if (saveBtn) saveBtn.addEventListener('click', saveRepo);
       if (urlEl) urlEl.addEventListener('keydown', (ev)=>{ if (ev.key === 'Enter') saveRepo(); });
+      if (rp2SaveBtn) rp2SaveBtn.addEventListener('click', saveDevice);
       if (flashBtn) flashBtn.addEventListener('click', flashLatest);
       if (confirmBtn) confirmBtn.addEventListener('click', doFlash);
       if (cancelBtn) cancelBtn.addEventListener('click', closeConfirm);

@@ -333,6 +333,9 @@ DEFAULT_CONFIG = {
         "repo_url": "https://raw.githubusercontent.com/RoBro92/fanbridge-link/main",
         # Optional: override board name; default 'rp2040'
         "board": "rp2040",
+        # Optional: preferred RP2 block device path (e.g., /dev/disk/by-id/...-part1 or /dev/sdX1)
+        # When set and present, flashing will use this path first.
+        "rp2_device": "",
     },
 }
 
@@ -1711,6 +1714,7 @@ def api_rp_status():
         "controller_version": ver,
         "repo_url": repo_url,
         "board": board,
+        "rp2_device": str(rp_cfg.get("rp2_device") or ""),
         "manifest_url": manifest_url,
         "latest": latest,
         "update_available": bool(update_available),
@@ -1738,6 +1742,25 @@ def api_rp_repo():
     except Exception:
         pass
     return jsonify({"ok": True, "repo_url": url})
+
+# --------- API: Set preferred RP2 device path ---------
+@app.post("/api/rp/rp2_device")
+def api_rp_set_device():
+    data = request.get_json(force=True, silent=True) or {}
+    path = (data.get("rp2_device") or "").strip()
+    c = load_config()
+    if "rp" not in c or not isinstance(c["rp"], dict):
+        c["rp"] = {}
+    c["rp"]["rp2_device"] = path
+    try:
+        save_config(c)
+    except Exception:
+        pass
+    try:
+        _audit("rp.rp2_device.update", rp2_device=path)
+    except Exception:
+        pass
+    return jsonify({"ok": True, "rp2_device": path})
 
 
 # --------- API: Flash latest firmware ---------
@@ -1791,16 +1814,25 @@ def api_rp_flash():
         _serial_send_line("BOOTSEL", expect_reply=False)
         # Small grace period for USB disconnect
         time.sleep(0.6)
-        # 2) Poll for RPI-RP2 block device (by-label or probed)
-        dev = None
-        deadline = time.time() + 40.0
-        logstep("waiting for RPI-RP2 device")
-        while time.time() < deadline:
+    # 2) Poll for RPI-RP2 block device (preferred path, by-label or probed)
+    dev = None
+    deadline = time.time() + 40.0
+    logstep("waiting for RPI-RP2 device")
+    while time.time() < deadline:
+        # Preferred path from config, if present
+        try:
+            c2 = load_config()
+            pref_dev = (c2.get("rp", {}) or {}).get("rp2_device") if isinstance(c2, dict) else ""
+            if pref_dev and os.path.exists(pref_dev) and _is_block_device(pref_dev):
+                dev = str(pref_dev)
+        except Exception:
+            pass
+        if not dev:
             dev = _find_rp2_dev_symlink() or _find_rp2_block_device()
-            if dev:
-                logstep("found RPI-RP2 device", ok=True, device=dev)
-                break
-            time.sleep(0.6)
+        if dev:
+            logstep("found RPI-RP2 device", ok=True, device=dev)
+            break
+        time.sleep(0.6)
         if not dev:
             logstep("RPI-RP2 device not detected (is container privileged?)", ok=False)
             return jsonify({"ok": False, "error": "RPI-RP2 device not detected (is container privileged?)", "progress": steps}), 503
