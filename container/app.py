@@ -986,10 +986,18 @@ def _mount_device(dev: str, mount_point: str) -> tuple[bool, str | None]:
     try:
         os.makedirs(mount_point, exist_ok=True)
         # Use sync + umask for permissive writes
-        cp = subprocess.run(["mount", "-o", "sync,umask=000", dev, mount_point], capture_output=True, text=True, timeout=5)
-        if cp.returncode != 0:
-            return False, cp.stderr.strip() or cp.stdout.strip() or "mount failed"
-        return True, None
+        args = ["mount", "-o", "sync,umask=000", dev, mount_point]
+        cp = subprocess.run(args, capture_output=True, text=True, timeout=8)
+        if cp.returncode == 0:
+            return True, None
+        # Fallback: try explicitly as vfat (RP2 uses FAT)
+        cp2 = subprocess.run(["mount", "-t", "vfat", "-o", "sync,umask=000", dev, mount_point], capture_output=True, text=True, timeout=8)
+        if cp2.returncode == 0:
+            return True, None
+        err = (cp.stderr or cp.stdout or "").strip()
+        if not err:
+            err = (cp2.stderr or cp2.stdout or "").strip()
+        return False, err or "mount failed"
     except Exception as e:
         return False, str(e)
 

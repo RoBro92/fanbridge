@@ -379,6 +379,10 @@
           <input type="text" id="rpRepoUrl" placeholder="https://…/manifest.json base" />
           <button id="rpSaveRepo">Save URL</button>
         </div>
+        <div class="serial-row" style="margin-bottom:8px;">
+          <input type="text" id="rp2Device" placeholder="Preferred RP2 device (e.g., /dev/sdX or /dev/disk/by-id/…-part1)" />
+          <button id="rpSaveDevice">Save Device</button>
+        </div>
         <div class="small">
           <div>Board: <span id="rpBoard">rp2040</span></div>
           <div>Latest: <span id="rpLatest">—</span></div>
@@ -621,6 +625,7 @@
       const board= document.getElementById('rpBoard');
       const latest = document.getElementById('rpLatest');
       const manifest = document.getElementById('rpManifest');
+      const rp2Dev = document.getElementById('rp2Device');
       const warn = document.getElementById('rpWarn');
       try{
         warn.style.display='none'; warn.textContent='';
@@ -645,6 +650,7 @@
         if (ser) ser.textContent = fmt(u.serial_number);
         if (ver) ver.textContent = fmt(j.controller_version);
         if (repo) repo.value = j.repo_url || repo.value || '';
+        if (rp2Dev) rp2Dev.value = j.rp2_device || rp2Dev.value || '';
         if (board) board.textContent = j.board || 'rp2040';
         if (latest) latest.textContent = j.latest ? `${j.latest.board}-${j.latest.version}` : '—';
         if (manifest){ manifest.textContent = j.manifest_url || '—'; manifest.href = j.manifest_url || '#'; }
