@@ -5,8 +5,13 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="csrf-token" content="{{ csrf_token }}">
   <title>FanBridge</title>
-  <link rel="icon" href="{{ url_for('static', filename='fanbridge.png') }}">
-  <link rel="apple-touch-icon" href="{{ url_for('static', filename='fanbridge.png') }}">
+  <!-- Favicons for all browsers (Safari needs sizes + mask-icon) -->
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='fanbridge.png') }}?v=1">
+  <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='fanbridge.png') }}?v=1">
+  <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='fanbridge.png') }}?v=1">
+  <link rel="mask-icon" href="{{ url_for('static', filename='safari-pinned-tab.svg') }}" color="#ff7a1a">
+  <link rel="shortcut icon" href="{{ url_for('static', filename='fanbridge.png') }}?v=1">
+  <meta name="theme-color" content="#0f172a">
   <!-- FanBridge UI: status, configuration, and modals; minimal client-side JS for polling -->
   <style>
     /* Tabs (distinct from info pills) */
