@@ -328,20 +328,20 @@
         <div class="serial-row" style="margin-bottom:8px;">
           <button id="btnPing">PING</button>
           <button id="btnTest">TEST</button>
-          <button id="btnVer">version</button>
-          <button id="btnStat">STATUS?</button>
+          <button id="btnVer">VERSION</button>
+          <button id="btnStat">STATUS</button>
         </div>
 
         <h3 style="margin-top:12px;">Send raw line</h3>
         <div class="serial-row">
-          <input type="text" id="serialLine" placeholder="Type a command e.g. SET PWM 64" />
+          <input type="text" id="serialLine" placeholder="Type a command e.g. 50 (percent)" />
           <button id="btnSendLine">Send</button>
         </div>
 
         <h3 style="margin-top:12px;">PWM test</h3>
         <div class="serial-slider">
-          <input type="range" id="pwmRange" min="0" max="255" value="0" />
-          <span class="small muted">value: <strong id="pwmVal">0</strong>/255</span>
+          <input type="range" id="pwmRange" min="0" max="100" value="0" />
+          <span class="small muted">value: <strong id="pwmVal">0</strong>%</span>
           <button id="btnPwmSend">Apply</button>
           <button id="btnPwmZero">Zero</button>
         </div>
@@ -374,14 +374,10 @@
         </div>
       </div>
       <div class="serial-box">
-        <h3>Repository</h3>
+        <h3>Link Updates</h3>
         <div class="serial-row" style="margin-bottom:8px;">
           <input type="text" id="rpRepoUrl" placeholder="https://…/manifest.json base" />
           <button id="rpSaveRepo">Save URL</button>
-        </div>
-        <div class="serial-row" style="margin-bottom:8px;">
-          <input type="text" id="rp2Device" placeholder="Preferred RP2 device (e.g., /dev/sdX or /dev/disk/by-id/…-part1)" />
-          <button id="rpSaveDevice">Save Device</button>
         </div>
         <div class="small">
           <div>Board: <span id="rpBoard">rp2040</span></div>
@@ -389,7 +385,7 @@
           <div>Manifest: <a id="rpManifest" href="#" target="_blank" rel="noopener">—</a></div>
         </div>
         <div class="serial-row" style="margin-top:10px;">
-          <button id="rpFlashLatest">Install latest</button>
+          <button id="rpFlashLatest" disabled title="Coming soon">Coming soon</button>
         </div>
         <div id="rpWarn" class="warnmsg small" style="display:none;"></div>
       </div>
@@ -625,7 +621,7 @@
       const board= document.getElementById('rpBoard');
       const latest = document.getElementById('rpLatest');
       const manifest = document.getElementById('rpManifest');
-      const rp2Dev = document.getElementById('rp2Device');
+      // Preferred RP2 device field removed (coming soon)
       const warn = document.getElementById('rpWarn');
       try{
         warn.style.display='none'; warn.textContent='';
@@ -1347,8 +1343,6 @@ function applyValidation(){
       const progModal = document.getElementById('rpFlashProgress');
       const progBox = document.getElementById('rpProgLog');
       const progClose = document.getElementById('rpProgClose');
-      const rp2DevEl = document.getElementById('rp2Device');
-      const rp2SaveBtn = document.getElementById('rpSaveDevice');
 
       function openConfirm(){ if (confirmModal) { confirmModal.style.display = 'flex'; } }
       function closeConfirm(){ if (confirmModal) { confirmModal.style.display = 'none'; } }
@@ -1374,15 +1368,6 @@ function applyValidation(){
           showToast('Saved repo URL', 'ok');
           refreshRp();
         }catch(e){ showToast('Failed to save repo URL', 'error'); }
-      }
-      async function saveDevice(){
-        if (!rp2DevEl) return;
-        try{
-          const r = await fetch('/api/rp/rp2_device', { method:'POST', headers: { 'Content-Type':'application/json', 'X-CSRF-Token': CSRF }, body: JSON.stringify({ rp2_device: rp2DevEl.value||'' }) });
-          const j = await r.json().catch(()=>({}));
-          if (!r.ok || !j.ok){ showToast('Failed to save device', 'error'); return; }
-          showToast('Saved device path', 'ok');
-        }catch(e){ showToast('Failed to save device', 'error'); }
       }
       async function flashLatest(){
         if (warn){ warn.style.display='none'; warn.textContent=''; }
@@ -1421,7 +1406,7 @@ function applyValidation(){
       }
       if (saveBtn) saveBtn.addEventListener('click', saveRepo);
       if (urlEl) urlEl.addEventListener('keydown', (ev)=>{ if (ev.key === 'Enter') saveRepo(); });
-      if (rp2SaveBtn) rp2SaveBtn.addEventListener('click', saveDevice);
+      // Flash coming soon: button disabled; no action bound
       if (flashBtn) flashBtn.addEventListener('click', flashLatest);
       if (confirmBtn) confirmBtn.addEventListener('click', doFlash);
       if (cancelBtn) cancelBtn.addEventListener('click', closeConfirm);
@@ -1485,14 +1470,14 @@ function applyValidation(){
     const pill    = document.getElementById('serialStatus');
 
     if (rng && lbl){
-      const upd=()=>{ lbl.textContent= String(rng.value); };
+      const upd=()=>{ lbl.textContent= String(rng.value) + '%'; };
       rng.addEventListener('input', upd); upd();
     }
 
-    if (btnPing) btnPing.addEventListener('click', ()=> apiSerialSend('PING'));
-    if (btnTest) btnTest.addEventListener('click', ()=> apiSerialSend('TEST'));
+    if (btnPing) btnPing.addEventListener('click', ()=> apiSerialSend('ping'));
+    if (btnTest) btnTest.addEventListener('click', ()=> apiSerialSend('test'));
     if (btnVer)  btnVer .addEventListener('click', ()=> apiSerialSend('version'));
-    if (btnStat) btnStat.addEventListener('click', ()=> apiSerialSend('STATUS?'));
+    if (btnStat) btnStat.addEventListener('click', ()=> apiSerialSend('status'));
 
     if (btnSend) btnSend.addEventListener('click', ()=>{
       const v = (inputLn && inputLn.value) ? inputLn.value.trim() : '';
@@ -1505,7 +1490,7 @@ function applyValidation(){
 
     if (btnPwm && rng) btnPwm.addEventListener('click', ()=> apiSerialPwm(rng.value));
     if (btnZero){
-      btnZero.addEventListener('click', ()=>{ if (rng){ rng.value=0; lbl && (lbl.textContent='0'); } apiSerialPwm(0); });
+      btnZero.addEventListener('click', ()=>{ if (rng){ rng.value=0; lbl && (lbl.textContent='0%'); } apiSerialPwm(0); });
     }
 
     // Keep the Serial tab header pill in sync with global refreshSerial()

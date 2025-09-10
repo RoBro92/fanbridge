@@ -825,7 +825,7 @@ import subprocess
 import stat
 
 def _serial_set_pwm_byte(value: Any) -> dict:
-    # clamps 0..255 and sends percentage (0..100) as a raw line
+    # Legacy helper: clamps 0..255 and converts to 0..100 then sends as raw line
     if not isinstance(value, (int, float, str)):
         return {"ok": False, "error": "invalid value"}
     try:
@@ -838,6 +838,20 @@ def _serial_set_pwm_byte(value: Any) -> dict:
     pct = int(round((v * 100) / 255))
     res = _serial_send_line(str(pct), expect_reply=True)
     res["value"] = pct
+    return res
+
+def _serial_set_pwm_percent(value: Any) -> dict:
+    # New helper: clamps 0..100 and sends as a single number line
+    if not isinstance(value, (int, float, str)):
+        return {"ok": False, "error": "invalid value"}
+    try:
+        v = int(value)
+    except Exception:
+        return {"ok": False, "error": "invalid value"}
+    if v < 0: v = 0
+    if v > 100: v = 100
+    res = _serial_send_line(str(v), expect_reply=True)
+    res["value"] = v
     return res
 
 
@@ -1100,10 +1114,11 @@ def compute_status():
             if not sstat.get("connected"):
                 auto_paused_msg = "controller not connected"
             else:
-                # Map 0–100% → 0–255
+                # Recommended PWM as percent 0–100
                 pct = int(recommended_pwm)
                 if pct < 0: pct = 0
                 if pct > 100: pct = 100
+                # Derive a duty 0..255 only for hysteresis comparison; we send percent to the controller.
                 duty = int(round(pct * 255 / 100))
                 # Apply hysteresis and min interval
                 min_ivl = int(cfg.get("auto_apply_min_interval_s", 3) or 3)
@@ -1112,7 +1127,7 @@ def compute_status():
                 delta_ok = (_AUTO_LAST_DUTY is None) or (abs(duty - int(_AUTO_LAST_DUTY)) >= max(0, hyst))
                 ivl_ok = (_AUTO_LAST_TS is None) or ((now_ts - float(_AUTO_LAST_TS)) >= max(1, min_ivl))
                 if delta_ok and ivl_ok:
-                    res = _serial_set_pwm_byte(duty)
+                    res = _serial_set_pwm_percent(pct)
                     if res.get("ok"):
                         auto_last_duty = duty
                         auto_last_ts = now_ts
@@ -1670,7 +1685,8 @@ def api_serial_pwm():
     data = request.get_json(force=True, silent=True) or {}
     if "value" not in data:
         return jsonify({"ok": False, "error": "missing value"}), 400
-    res = _serial_set_pwm_byte(data.get("value"))
+    # Accept 0..100% from client
+    res = _serial_set_pwm_percent(data.get("value"))
     if res.get("ok"):
         log.info("serial pwm | port=%s value=%s reply=%r", res.get("port"), res.get("value"), res.get("reply"))
     else:
