@@ -34,7 +34,18 @@ Install fanbridge directly through the Unraid Community Applications plugin for 
 
 ### Local Dev Setup (VS Code / Pylance)
 
-To enable editor IntelliSense and fix missing import warnings (Flask, Werkzeug, dotenv, yaml), create a local virtualenv and install dev deps:
+To enable IntelliSense and fix missing import warnings (Flask, Werkzeug, dotenv, yaml), create a local virtualenv and install dev deps. You can do this either at the repo root or inside `fanbridge/` — the latter is recommended if you open the `fanbridge/` folder directly in VS Code.
+
+Option A — venv inside `fanbridge/` (recommended when opening `fanbridge/`):
+
+```
+cd fanbridge
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+```
+
+Option B — venv at repo root (if your workspace root is the repo root):
 
 ```
 python3 -m venv .venv
@@ -42,7 +53,8 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 ```
 
-Then, in VS Code, select the interpreter at `.venv/bin/python` if not auto-picked. The workspace includes `.vscode/settings.json` that points to this venv.
+Then select the interpreter in VS Code (Command Palette → “Python: Select Interpreter”).
+If you opened the `fanbridge/` folder, the workspace file `fanbridge/.vscode/settings.json` points to `fanbridge/.venv/bin/python`.
 
 
 ## Roadmap / Planned Features
