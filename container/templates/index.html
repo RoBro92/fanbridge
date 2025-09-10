@@ -87,12 +87,17 @@
     /* Floating Ko‑fi button (bottom-right) */
     #openModalBtn { position: fixed; right: 16px; bottom: 16px; z-index: 3000; display:block; cursor: pointer; background: transparent; border: none; padding: 0; }
     #openModalBtn img { height: 36px; width: auto; border:0; box-shadow: 0 6px 20px rgba(0,0,0,.25); border-radius: 6px; display:block; }
+    #openModalBtn .label { display: none; }
     /* Generic modal styles */
     .modal { display: none; position: fixed; z-index: 3100; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background: rgba(0,0,0,.6); }
     /* Narrower modal to better fit Ko‑fi widget */
-    .modal-content { background: var(--cardbg); color: var(--fg); margin: 5% auto; padding: 0; border-radius: 12px; max-width: 600px; width: 92%; box-shadow: 0 10px 30px rgba(0,0,0,.3); border:1px solid var(--border); }
+    .modal-content { background: var(--cardbg); color: var(--fg); margin: 5% auto; padding: 0; border-radius: 12px; max-width: 540px; width: 92%; box-shadow: 0 10px 30px rgba(0,0,0,.3); border:1px solid var(--border); }
     .modal-header { display:flex; justify-content: space-between; align-items:center; padding:6px 8px; background: var(--pillbg); border-bottom:1px solid var(--border); }
     .close { cursor: pointer; font-size: 24px; padding: 4px 8px; }
+    .modal-footer { padding:6px 8px; background: var(--pillbg); border-top:1px solid var(--border); color: var(--muted); font-size: 12px; }
+    /* Theme-consistent background around the embedded iframe */
+    #kofiBody { background: var(--cardbg); }
+    #kofiBody iframe { background: var(--cardbg) !important; display:block; }
 
     /* Banners and toasts */
     .banner { display:none; border:1px solid var(--border); border-radius:8px; padding:10px 12px; margin:12px 0; background: var(--pillbg); }
@@ -457,13 +462,21 @@
   </div>
 
   <div class="site-footer small">
-    <a href="/api/status">API</a> &nbsp;|&nbsp; <a href="/health">Health</a> &nbsp;|&nbsp;
+    <a href="https://github.com/RoBro92/fanbridge" target="_blank" rel="noopener">GitHub</a>
+    &nbsp;|&nbsp;
+    <a href="https://ko-fi.com/robro92" target="_blank" rel="noopener">Donate</a>
+    &nbsp;|&nbsp;
+    <a href="/api/status">API</a>
+    &nbsp;|&nbsp;
+    <a href="/health">Health</a>
+    &nbsp;|&nbsp;
     <a id="supportLink" href="#" rel="noopener">Support</a>
   </div>
 
   <!-- Floating Ko‑fi button (opens modal) -->
   <button id="openModalBtn" type="button" aria-label="Support FanBridge on Ko‑fi">
     <img src="{{ url_for('static', filename='kofi.png') }}" alt="Ko‑fi" />
+    <span class="label">Support Me</span>
   </button>
 
   <!-- Modal: Ko‑fi embed (lazy-loaded) -->
@@ -474,6 +487,7 @@
         <span class="close" id="kofiClose">&times;</span>
       </div>
       <div id="kofiBody" style="min-height:300px;"></div>
+      <div class="modal-footer">Payments are handled securely by Ko‑fi over HTTPS. No card data passes through FanBridge.</div>
     </div>
   </div>
 
@@ -1301,7 +1315,8 @@ function applyValidation(){
         ifr.id = 'kofiframe';
         ifr.src = 'https://ko-fi.com/robro92/?hidefeed=true&widget=true&embed=true&preview=true';
         ifr.title = 'robro92';
-        ifr.setAttribute('style','border:none;width:100%;padding:4px;background:#f9f9f9;');
+        // Match app theme for the iframe element itself (content remains ko-fi themed)
+        ifr.setAttribute('style','border:none;width:100%;padding:0;background:transparent;');
         ifr.height = '712';
         host.appendChild(ifr);
       }
