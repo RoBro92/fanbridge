@@ -210,6 +210,42 @@ def _audit(event: str, **data) -> None:
     except Exception:
         pass
 
+# --------- Minimal Prometheus metrics ---------
+try:
+    import threading as _thr
+    _METRICS_LOCK = _thr.Lock()
+except Exception:
+    _METRICS_LOCK = None  # type: ignore[assignment]
+
+# Counters: http requests, serial opens, serial commands
+_METRICS_HTTP: dict[tuple[str, int], int] = {}
+_METRICS_SERIAL_CMD: dict[tuple[str, str], int] = {}
+_METRICS_SERIAL_OPEN_FAIL: int = 0
+
+def _m_inc_http(method: str, code: int) -> None:
+    key = (str(method).upper(), int(code))
+    if _METRICS_LOCK:
+        with _METRICS_LOCK:
+            _METRICS_HTTP[key] = _METRICS_HTTP.get(key, 0) + 1
+    else:
+        _METRICS_HTTP[key] = _METRICS_HTTP.get(key, 0) + 1
+
+def _m_inc_serial_cmd(kind: str, status: str) -> None:
+    key = (str(kind), str(status))
+    if _METRICS_LOCK:
+        with _METRICS_LOCK:
+            _METRICS_SERIAL_CMD[key] = _METRICS_SERIAL_CMD.get(key, 0) + 1
+    else:
+        _METRICS_SERIAL_CMD[key] = _METRICS_SERIAL_CMD.get(key, 0) + 1
+
+def _m_inc_serial_open_fail() -> None:
+    global _METRICS_SERIAL_OPEN_FAIL
+    if _METRICS_LOCK:
+        with _METRICS_LOCK:
+            _METRICS_SERIAL_OPEN_FAIL += 1
+    else:
+        _METRICS_SERIAL_OPEN_FAIL += 1
+
 def _read_version_from_release() -> str | None:
     # Extract version from RELEASE.md/CHANGELOG.md.
     # Accepts formats: "Version: X.Y.Z", "# vX.Y.Z", "## 1.2.3", or "## [1.2.3]".
@@ -256,10 +292,11 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = _load_or_create_secret()
 
 # Session/cookie hardening + predictability
+_SECURE_COOKIES = (os.environ.get("FANBRIDGE_SECURE_COOKIES", "0") == "1")
 app.config.update(
     SESSION_COOKIE_NAME="fanbridge_session",
     SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=False,  # set True if you terminate TLS in front
+    SESSION_COOKIE_SECURE=bool(_SECURE_COOKIES),  # enable in prod behind TLS via env
     SESSION_COOKIE_HTTPONLY=True,
     PERMANENT_SESSION_LIFETIME=datetime.timedelta(days=30),
 )
@@ -648,6 +685,10 @@ def probe_serial_open(port: str, baud: int | None = None):
             logging.getLogger("fanbridge").warning(
                 "serial open failed | port=%s baud=%s err=%s", port, baud or SERIAL_BAUD, msg
             )
+            try:
+                _m_inc_serial_open_fail()
+            except Exception:
+                pass
         except Exception:
             pass
         return False, msg
@@ -1464,6 +1505,55 @@ def add_no_cache(resp):
     # Make JSON responses always fresh in browsers / proxies
     if resp.mimetype == "application/json":
         resp.headers["Cache-Control"] = "no-store, max-age=0"
+    # Light security headers suitable for single-origin app
+    try:
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("X-Frame-Options", "DENY")
+        resp.headers.setdefault("Referrer-Policy", "same-origin")
+        # CSP for the app: allow Ko‑fi iframe (frame) and https images. No external scripts.
+        csp = (
+            "default-src 'self'; "
+            "img-src 'self' data: https:; "
+            "style-src 'self' 'unsafe-inline'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "frame-src 'self' https://ko-fi.com"
+        )
+        resp.headers.setdefault("Content-Security-Policy", csp)
+    except Exception:
+        pass
+    return resp
+
+@app.get("/metrics")
+def metrics():
+    # Prometheus text exposition format
+    lines: list[str] = []
+    lines.append("# HELP fanbridge_http_requests_total HTTP requests by method and code")
+    lines.append("# TYPE fanbridge_http_requests_total counter")
+    try:
+        items = list(_METRICS_HTTP.items())
+    except Exception:
+        items = []
+    for (method, code), val in items:
+        lines.append(f"fanbridge_http_requests_total{{method=\"{method}\",code=\"{code}\"}} {int(val)}")
+
+    lines.append("# HELP fanbridge_serial_commands_total Serial commands by kind and status")
+    lines.append("# TYPE fanbridge_serial_commands_total counter")
+    try:
+        sc = list(_METRICS_SERIAL_CMD.items())
+    except Exception:
+        sc = []
+    for (kind, status), val in sc:
+        lines.append(f"fanbridge_serial_commands_total{{kind=\"{kind}\",status=\"{status}\"}} {int(val)}")
+
+    lines.append("# HELP fanbridge_serial_open_failures_total Serial open failures")
+    lines.append("# TYPE fanbridge_serial_open_failures_total counter")
+    try:
+        lines.append(f"fanbridge_serial_open_failures_total {int(_METRICS_SERIAL_OPEN_FAIL)}")
+    except Exception:
+        lines.append("fanbridge_serial_open_failures_total 0")
+
+    resp = make_response("\n".join(lines) + "\n")
+    resp.headers["Content-Type"] = "text/plain; version=0.0.4; charset=utf-8"
     return resp
 
 # Request timing + logging
@@ -1482,6 +1572,10 @@ def _req_log(resp):
         meth = request.method
         code = resp.status_code
         lg = logging.getLogger("fanbridge")
+        try:
+            _m_inc_http(meth, code)
+        except Exception:
+            pass
         # Always surface non-2xx responses
         if code >= 500:
             lg.error("%s %s -> %s in %sms", meth, path, code, dur_ms)
@@ -1677,8 +1771,12 @@ def api_serial_send():
     # log succinctly
     if res.get("ok"):
         log.info("serial send | port=%s echo=%r reply=%r", res.get("port"), line, res.get("reply"))
+        try: _m_inc_serial_cmd("send", "ok")
+        except Exception: pass
     else:
         log.warning("serial send failed | echo=%r err=%s", line, res.get("error") or "unknown")
+        try: _m_inc_serial_cmd("send", "error")
+        except Exception: pass
     code = 200 if res.get("ok") else 503
     return jsonify(res), code
 
@@ -1693,8 +1791,12 @@ def api_serial_pwm():
     res = _serial_set_pwm_percent(data.get("value"))
     if res.get("ok"):
         log.info("serial pwm | port=%s value=%s reply=%r", res.get("port"), res.get("value"), res.get("reply"))
+        try: _m_inc_serial_cmd("pwm", "ok")
+        except Exception: pass
     else:
         log.warning("serial pwm failed | value=%s err=%s", data.get("value"), res.get("error") or "unknown")
+        try: _m_inc_serial_cmd("pwm", "error")
+        except Exception: pass
     code = 200 if res.get("ok") else 503
     return jsonify(res), code
 

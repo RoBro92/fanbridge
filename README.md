@@ -1,6 +1,8 @@
-# FanBridge
+# FanBridge v1.0.0
 
 FanBridge is a Dockerised Unraid service designed to monitor hard drive temperatures and intelligently control external PWM fans via Arduino or RP2040 microcontrollers. It provides a seamless way to keep your drives cool by adjusting fan speeds based on drive temperature data, helping to extend drive lifespan and reduce noise.
+
+This is the 1.0.0 release.
 
 ## Features
 
@@ -22,6 +24,11 @@ FanBridge is a Dockerised Unraid service designed to monitor hard drive temperat
 - Mobile-friendly responsive UI for use on various devices.
 - Theme menu with dark/light toggle for user preference.
 - USB serial communication with Arduino/RP2040 including test integration.
+- Link Updates panel shows controller version, manifest URL, and latest version (updates remain disabled in-container).
+- Logs tab defaults the download window to the last 24 hours.
+- Persistent footer (API, Health, Support, Donate) across tabs.
+- Minimal Prometheus metrics at `/metrics` (HTTP requests, serial commands, serial open failures).
+- Optional secure cookies via `FANBRIDGE_SECURE_COOKIES=1`; standard security headers.
 
 ## Usage
 
@@ -31,6 +38,17 @@ Run fanbridge easily via Docker or as an Unraid app:
 ### Unraid App
 
 Install fanbridge directly through the Unraid Community Applications plugin for one-click deployment and management.
+
+Unprivileged setup:
+- Add a Device mapping for your controller (prefer `/dev/serial/by-id/…`).
+- Map `/dev/serial/by-id` into the container read-only.
+- Optionally set `FANBRIDGE_SERIAL_PORT` to the by-id path; otherwise the app auto-detects.
+- Keep “Privileged” off. No cgroup rules or group-add are required when using Device mapping.
+
+Production tips:
+- Reverse proxy/TLS recommended; set `FANBRIDGE_SECURE_COOKIES=1` when HTTPS terminates in front.
+- Tune Gunicorn via env: `GUNICORN_WORKERS` (default 2) and `GUNICORN_TIMEOUT` (default 30).
+- Metrics: scrape `/metrics` (text format) for basic counters.
 
 ### Local Dev Setup (VS Code / Pylance)
 
@@ -75,6 +93,12 @@ If you opened the `fanbridge/` folder, the workspace file `fanbridge/.vscode/set
 - Import/export of configs for sharing.
 - Enhanced security headers and rate limiting.
 
-## Changelog
+## Release Notes (1.0.0)
+- Unprivileged serial operation using Device mapping; by-id paths preferred.
+- UI polish: logos, persistent footer, Link Updates information restored.
+- Logs: default last 24 hours for downloads.
+- Security: optional secure cookies + standard headers.
+- Ops: `/metrics` endpoint and configurable Gunicorn timeout.
 
-For the canonical version history and detailed changelog, please refer to `fanbridge/RELEASE.md`.
+## Changelog
+For the canonical version history and detailed changelog, see `fanbridge/RELEASE.md`.

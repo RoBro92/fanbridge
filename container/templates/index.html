@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="csrf-token" content="{{ csrf_token }}">
   <title>FanBridge</title>
+  <link rel="icon" href="{{ url_for('static', filename='fanbridge.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='fanbridge.png') }}">
   <!-- FanBridge UI: status, configuration, and modals; minimal client-side JS for polling -->
   <style>
     /* Tabs (distinct from info pills) */
@@ -73,8 +75,24 @@
     .right { float:right; }
     .footer { margin-top: 16px; }
     code { background:#f6f8fa; padding:2px 6px; border-radius:4px; }
-    /* Top-right logo fixed to 100x100 */
-    .site-logo { position: fixed; right: 14px; top: 14px; width: 100px; height: 100px; z-index: 1100; opacity: .95; object-fit: contain; }
+    .site-footer { margin: 24px 0; color: var(--muted); }
+    .site-footer a { color: inherit; }
+    /* Never show external Ko‑fi overlay widgets */
+    .kofi-overlay, #kofi-widget-overlay,
+    body > div[id*="kofi"][style*="position: fixed"],
+    body > div[class*="kofi"][style*="position: fixed"] { display:none !important; }
+    /* Header layout with non-floating logo */
+    .page-header { display:flex; align-items:center; justify-content: space-between; }
+    .site-logo { width: 100px; height: 100px; opacity: .95; object-fit: contain; margin-left: 12px; }
+    /* Floating Ko‑fi button (bottom-right) */
+    #openModalBtn { position: fixed; right: 16px; bottom: 16px; z-index: 3000; display:block; cursor: pointer; background: transparent; border: none; padding: 0; }
+    #openModalBtn img { height: 36px; width: auto; border:0; box-shadow: 0 6px 20px rgba(0,0,0,.25); border-radius: 6px; display:block; }
+    /* Generic modal styles */
+    .modal { display: none; position: fixed; z-index: 3100; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background: rgba(0,0,0,.6); }
+    /* Narrower modal to better fit Ko‑fi widget */
+    .modal-content { background: var(--cardbg); color: var(--fg); margin: 5% auto; padding: 0; border-radius: 12px; max-width: 600px; width: 92%; box-shadow: 0 10px 30px rgba(0,0,0,.3); border:1px solid var(--border); }
+    .modal-header { display:flex; justify-content: space-between; align-items:center; padding:6px 8px; background: var(--pillbg); border-bottom:1px solid var(--border); }
+    .close { cursor: pointer; font-size: 24px; padding: 4px 8px; }
 
     /* Banners and toasts */
     .banner { display:none; border:1px solid var(--border); border-radius:8px; padding:10px 12px; margin:12px 0; background: var(--pillbg); }
@@ -176,8 +194,10 @@
   </style>
 </head>
 <body data-poll="{{ poll_s|int }}" data-version="{{ version or '—' }}">
-  <img class="site-logo" src="{{ url_for('static', filename='fanbridge.png') }}" alt="FanBridge" />
-  <h1 class="brand">FanBridge for Unraid</h1>
+  <div class="page-header">
+    <h1 class="brand">FanBridge for Unraid</h1>
+    <img class="site-logo" src="{{ url_for('static', filename='fanbridge.png') }}" alt="FanBridge" />
+  </div>
 
   <div class="meta flex">
     <span id="ver"   class="pill">version: {{ version or "—" }}</span>
@@ -312,9 +332,7 @@
     </div>
   </div>
 
-  <div class="footer small muted">
-    <a href="/api/status">API</a> &nbsp;|&nbsp; <a href="/health">Health</a>
-  </div>
+  <!-- footer moved global below -->
 </div> <!-- /#panel-main -->
 
 <div id="panel-serial" style="display:none;">
@@ -435,6 +453,27 @@
         <span class="small muted">Download uses current view’s minimum level and optional time window.</span>
       </div>
       <div id="logbox" class="serial-console" style="height:320px;"></div>
+    </div>
+  </div>
+
+  <div class="site-footer small">
+    <a href="/api/status">API</a> &nbsp;|&nbsp; <a href="/health">Health</a> &nbsp;|&nbsp;
+    <a id="supportLink" href="#" rel="noopener">Support</a>
+  </div>
+
+  <!-- Floating Ko‑fi button (opens modal) -->
+  <button id="openModalBtn" type="button" aria-label="Support FanBridge on Ko‑fi">
+    <img src="{{ url_for('static', filename='kofi.png') }}" alt="Ko‑fi" />
+  </button>
+
+  <!-- Modal: Ko‑fi embed (lazy-loaded) -->
+  <div id="kofiModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="kofiTitle">
+    <div class="modal-content">
+      <div class="modal-header">
+        <strong id="kofiTitle" class="small">Support FanBridge</strong>
+        <span class="close" id="kofiClose">&times;</span>
+      </div>
+      <div id="kofiBody" style="min-height:300px;"></div>
     </div>
   </div>
 
@@ -1252,6 +1291,49 @@ function applyValidation(){
     })();
   </script>
   <script>
+    // Ko‑fi floating button -> open modal with embedded iframe
+    (function(){
+      function ensureIframe(){
+        var host = document.getElementById('kofiBody');
+        if (!host) return;
+        if (host.querySelector('iframe')) return; // already loaded
+        var ifr = document.createElement('iframe');
+        ifr.id = 'kofiframe';
+        ifr.src = 'https://ko-fi.com/robro92/?hidefeed=true&widget=true&embed=true&preview=true';
+        ifr.title = 'robro92';
+        ifr.setAttribute('style','border:none;width:100%;padding:4px;background:#f9f9f9;');
+        ifr.height = '712';
+        host.appendChild(ifr);
+      }
+      function openKofi(ev){
+        if (ev) { try { ev.preventDefault(); } catch(e){} }
+        var modal = document.getElementById('kofiModal');
+        if (!modal) return;
+        ensureIframe();
+        modal.style.display = 'block';
+        setTimeout(function(){ try{ document.getElementById('kofiClose').focus(); }catch(e){} }, 10);
+      }
+      function closeKofi(){ var modal = document.getElementById('kofiModal'); if (modal){ modal.style.display = 'none'; } }
+      // Direct bindings
+      var btn = document.getElementById('openModalBtn');
+      var closeBtn = document.getElementById('kofiClose');
+      if (btn){ btn.addEventListener('click', openKofi); }
+      if (closeBtn){ closeBtn.addEventListener('click', closeKofi); }
+      var modal = document.getElementById('kofiModal');
+      if (modal){ modal.addEventListener('click', function(ev){ if (ev.target === modal) closeKofi(); }); }
+      // Event delegation fallback (covers inner <img> clicks or dynamic replacement)
+      document.addEventListener('click', function(ev){
+        var t = ev.target;
+        if (!t) return;
+        if (t.id === 'openModalBtn' || (t.closest && t.closest('#openModalBtn'))){
+          openKofi(ev);
+        }
+      }, true);
+      // Keyboard: ESC to close
+      document.addEventListener('keydown', function(ev){ if (ev.key === 'Escape') closeKofi(); });
+    })();
+  </script>
+  <script>
     // Logs download helper
     (function(){
       const btn = document.getElementById('log_dl_btn');
@@ -1260,6 +1342,17 @@ function applyValidation(){
       const toEl = document.getElementById('log_to');
       const clrBtn = document.getElementById('log_clear_btn');
       if (!btn || !fmtSel) return;
+      // Initialize default time window to last 24 hours if empty
+      try {
+        const fmtLocal = (d)=>{
+          const p = (n)=> String(n).padStart(2,'0');
+          return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+        };
+        const now = new Date();
+        const dayAgo = new Date(now.getTime() - 24*60*60*1000);
+        if (fromEl && !fromEl.value) fromEl.value = fmtLocal(dayAgo);
+        if (toEl && !toEl.value) toEl.value = fmtLocal(now);
+      } catch(e) { /* ignore */ }
       function currentMin(){
         if (logFilters.has('DEBUG')) return 'DEBUG';
         if (logFilters.has('INFO')) return 'INFO';

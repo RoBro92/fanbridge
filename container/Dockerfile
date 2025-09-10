@@ -21,9 +21,10 @@ COPY RELEASE.md /app/RELEASE.md
 ENV PYTHONUNBUFFERED=1
 ENV FANBRIDGE_CONFIG=/config/config.yml
 ENV GUNICORN_WORKERS=2
+ENV GUNICORN_TIMEOUT=30
 
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
   CMD curl -fsS http://localhost:8080/health || exit 1
 
-CMD ["bash", "-lc", "gunicorn -w ${GUNICORN_WORKERS:-2} -b 0.0.0.0:8080 app:app"]
+CMD ["bash", "-lc", "gunicorn -w ${GUNICORN_WORKERS:-2} --timeout ${GUNICORN_TIMEOUT:-30} -b 0.0.0.0:8080 app:app"]
