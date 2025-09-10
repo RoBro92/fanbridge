@@ -376,6 +376,38 @@ DEFAULT_CONFIG = {
     },
 }
 
+# Threshold for considering /unraid/disks.ini stale (seconds). Defaults to Unraid's
+# poll_attributes default (30 minutes). Can be tuned via env.
+try:
+    DISKS_STALE_WARN_SEC = int(os.environ.get("FANBRIDGE_DISKS_STALE_WARN_SEC", "1800") or "1800")
+except Exception:
+    DISKS_STALE_WARN_SEC = 1800
+
+def _is_bind_mounted_file(path: str) -> bool:
+    """Detect if a specific file path is used as a mountpoint (bind-mounted file).
+
+    When a single file on the host is bind-mounted into the container, and the
+    host atomically replaces that file (rename), the mount inside the container
+    can keep pointing at the old inode, so you won't see updates. Mapping the
+    parent directory instead avoids this.
+    """
+    try:
+        if os.path.isdir(path):
+            return False
+        with open("/proc/self/mountinfo", "r", encoding="utf-8", errors="ignore") as f:
+            for ln in f:
+                # The mount point is the 5th field (space-delimited) before the " - " separator
+                try:
+                    left = ln.split(" - ", 1)[0]
+                    fields = left.split()
+                    if len(fields) >= 5 and fields[4] == path:
+                        return True
+                except Exception:
+                    continue
+    except Exception:
+        return False
+    return False
+
 def _load_users() -> dict:
     try:
         if not os.path.exists(USERS_PATH):
@@ -1203,6 +1235,7 @@ def compute_status():
         "mode": mode,
         "version": APP_VERSION,
         "disks_ini_mtime": disks_mtime,
+        "disks_stale_warn_s": int(DISKS_STALE_WARN_SEC),
         # Auto-apply reporting
         "auto_apply": auto_enabled,
         "auto_last_duty": int(auto_last_duty) if auto_last_duty is not None else None,
@@ -1219,10 +1252,16 @@ def compute_status():
                 "status | mode=%s hdd_avg=%s ssd_avg=%s pwm=%s drives=%s",
                 mode, hdd.get("avg"), ssd.get("avg"), payload["recommended_pwm"], len(drives)
             )
-        # Warn periodically if disks.ini appears stale (>5 minutes)
+        # One-time advisory if disks.ini is bind-mounted as a single file (can go stale on host rename)
+        try:
+            if _dbg_should("disks_ini_bind_advice", 9999999) and _is_bind_mounted_file(DISKS_INI):
+                log.warning("/unraid/disks.ini is bind-mounted as a single file; map the directory /var/local/emhttp -> /unraid:ro to see instant updates")
+        except Exception:
+            pass
+        # Warn periodically if disks.ini appears stale (> DISKS_STALE_WARN_SEC)
         if disks_mtime:
             try:
-                if (time.time() - float(disks_mtime)) > 300 and _dbg_should("disks_ini_stale_warn", 600):
+                if (time.time() - float(disks_mtime)) > max(60, int(DISKS_STALE_WARN_SEC)) and _dbg_should("disks_ini_stale_warn", 600):
                     age = int(time.time() - float(disks_mtime))
                     log.warning("/unraid/disks.ini appears stale | age_s=%s", age)
             except Exception:

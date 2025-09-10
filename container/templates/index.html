@@ -878,7 +878,11 @@ function applyValidation(){
           const wrote = j.disks_ini_mtime * 1000;
           mtLabel = formatAge(Date.now() - wrote);
           mtEl.title = 'Unraid wrote /var/local/emhttp/disks.ini at: ' + new Date(wrote).toLocaleString();
-          if ((Date.now() - wrote) > 60000) bannerMsg = 'Warning: /unraid/disks.ini appears stale (older than 60s).';
+          const warnMs = (typeof j.disks_stale_warn_s === 'number' ? j.disks_stale_warn_s : 1800) * 1000;
+          if ((Date.now() - wrote) > warnMs) {
+            const mins = Math.round(warnMs/60000);
+            bannerMsg = `Warning: /unraid/disks.ini appears stale (older than ${mins} min).`;
+          }
         } else {
           mtEl.title = 'disks.ini timestamp not available';
           bannerMsg = 'Could not read /unraid/disks.ini (is the path mapped read-only to the container?)';
