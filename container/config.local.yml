@@ -66,4 +66,5 @@ auto_apply_hysteresis_duty: 5
 rp:
   repo_url: https://raw.githubusercontent.com/RoBro92/fanbridge-firmware/main
   board: rp2040
+  rp2_device: ''
 log_level: INFO

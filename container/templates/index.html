@@ -73,6 +73,8 @@
     .right { float:right; }
     .footer { margin-top: 16px; }
     code { background:#f6f8fa; padding:2px 6px; border-radius:4px; }
+    /* Top-right logo fixed to 100x100 */
+    .site-logo { position: fixed; right: 14px; top: 14px; width: 100px; height: 100px; z-index: 1100; opacity: .95; object-fit: contain; }
 
     /* Banners and toasts */
     .banner { display:none; border:1px solid var(--border); border-radius:8px; padding:10px 12px; margin:12px 0; background: var(--pillbg); }
@@ -174,6 +176,7 @@
   </style>
 </head>
 <body data-poll="{{ poll_s|int }}" data-version="{{ version or '—' }}">
+  <img class="site-logo" src="{{ url_for('static', filename='fanbridge.png') }}" alt="FanBridge" />
   <h1 class="brand">FanBridge for Unraid</h1>
 
   <div class="meta flex">
