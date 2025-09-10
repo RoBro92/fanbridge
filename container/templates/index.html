@@ -852,9 +852,15 @@ function applyValidation(){
 
         const VERSION_FALLBACK = document.body.dataset.version || '—';
         const verEl = document.getElementById('ver');
-        verEl.textContent = 'version: ' + (j.version || VERSION_FALLBACK);
-        verEl.classList.remove('warn');
-        verEl.title = '';
+        if (verEl){
+          verEl.textContent = 'version: ' + (j.version || VERSION_FALLBACK);
+          verEl.classList.remove('warn');
+          verEl.classList.remove('clickable');
+          verEl.removeAttribute('tabindex');
+          verEl.title = '';
+          verEl.onclick = null;
+          verEl.onkeyup = null;
+        }
         document.getElementById('pwm').textContent = (j.recommended_pwm ?? '—') + '%';
 
         const now = new Date();
@@ -862,35 +868,7 @@ function applyValidation(){
         updEl.textContent = 'updated: ' + now.toLocaleTimeString();
         updEl.title = 'FanBridge last fetched /api/status at: ' + now.toLocaleString();
 
-        // After status, query app version latest to update top version pill
-        try {
-          const rv = await fetchWithTimeout('/api/app/version', { cache: 'no-store' }, 8000);
-          const av = await rv.json();
-          if (av && verEl){
-            const cur = (av.current || j.version || VERSION_FALLBACK);
-            const repo = String(av.repo || 'RoBro92/fanbridge');
-            const repoUrl = `https://github.com/${repo}`;
-            const relUrl = (av.latest) ? `${repoUrl}/releases/tag/${encodeURIComponent(av.latest)}` : `${repoUrl}/releases/latest`;
-
-            verEl.textContent = 'version: ' + cur + (av.update_available ? ' (update available)' : '');
-            verEl.classList.remove('clickable');
-            verEl.removeAttribute('tabindex');
-            verEl.onclick = null;
-            verEl.onkeyup = null;
-
-            if (av.update_available){
-              verEl.classList.add('warn');
-              verEl.classList.add('clickable');
-              verEl.title = (av.latest ? `Latest: ${av.latest} — click to view release` : 'Click to view latest release');
-              verEl.setAttribute('tabindex', '0');
-              verEl.onclick = () => { try { window.open(relUrl, '_blank'); } catch(e){} };
-              verEl.onkeyup = (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { try { window.open(relUrl, '_blank'); } catch(e){} } };
-            } else {
-              verEl.classList.remove('warn');
-              verEl.title = '';
-            }
-          }
-        } catch(e) { /* ignore */ }
+        // app version pill shows current version only (no update check)
 
         // disks.ini mtime pill + banner logic
         const mtEl = document.getElementById('mtime');

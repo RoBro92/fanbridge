@@ -1219,10 +1219,10 @@ def compute_status():
                 "status | mode=%s hdd_avg=%s ssd_avg=%s pwm=%s drives=%s",
                 mode, hdd.get("avg"), ssd.get("avg"), payload["recommended_pwm"], len(drives)
             )
-        # Warn periodically if disks.ini appears stale (>60s)
+        # Warn periodically if disks.ini appears stale (>5 minutes)
         if disks_mtime:
             try:
-                if (time.time() - float(disks_mtime)) > 60 and _dbg_should("disks_ini_stale_warn", 300):
+                if (time.time() - float(disks_mtime)) > 300 and _dbg_should("disks_ini_stale_warn", 600):
                     age = int(time.time() - float(disks_mtime))
                     log.warning("/unraid/disks.ini appears stale | age_s=%s", age)
             except Exception:
@@ -1658,7 +1658,7 @@ def _unhandled(e):
 def _auth_and_rate():
     p = request.path
     # allow public endpoints
-    if p.startswith("/static/") or p in ("/login", "/health"):
+    if p.startswith("/static/") or p in ("/login", "/health", "/api/app/version"):
         return
     # require login
     if "user" not in session:
