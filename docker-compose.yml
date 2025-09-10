@@ -14,9 +14,17 @@ services:
     volumes:
       # Persist app config
       - ./dev-appdata:/config
-      # Dev-only: live-edit templates/static (uncomment locally)
-      # - ./container/templates:/app/templates:ro
-      # - ./container/static:/app/static:ro
-      # Optional: map Unraid disks.ini
-      # - /var/local/emhttp/disks.ini:/unraid/disks.ini:ro
+      # Recommended: expose stable USB serial symlinks for auto-detect (read-only)
+      # - /dev/serial/by-id:/dev/serial/by-id:ro
+    # Clean unprivileged serial access: map the device explicitly (no privileged, no cgroup rules)
+    # Uncomment and set your device path (prefer by-id if available)
+    # devices:
+    #   - "/dev/ttyACM0:/dev/ttyACM0"
+    # environment:
+    #   - FANBRIDGE_SERIAL_PORT=/dev/serial/by-id/usb-Your_Device
+    # Dev-only: live-edit templates/static (uncomment locally)
+    # - ./container/templates:/app/templates:ro
+    # - ./container/static:/app/static:ro
+    # Optional: map Unraid disks.ini
+    # - /var/local/emhttp/disks.ini:/unraid/disks.ini:ro
     restart: unless-stopped

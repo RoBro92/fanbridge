@@ -646,7 +646,9 @@
         if (ser) ser.textContent = fmt(u.serial_number);
         if (ver) ver.textContent = fmt(j.controller_version);
         if (repo) repo.value = j.repo_url || repo.value || '';
-        if (rp2Dev) rp2Dev.value = j.rp2_device || rp2Dev.value || '';
+        // rp2Dev input was removed from the UI; guard against undefined
+        // Keep compatibility if it is reintroduced later.
+        try { if (typeof rp2Dev !== 'undefined' && rp2Dev) { rp2Dev.value = j.rp2_device || rp2Dev.value || ''; } } catch(_) {}
         if (board) board.textContent = j.board || 'rp2040';
         if (latest) latest.textContent = j.latest ? `${j.latest.board}-${j.latest.version}` : '—';
         if (manifest){ manifest.textContent = j.manifest_url || '—'; manifest.href = j.manifest_url || '#'; }

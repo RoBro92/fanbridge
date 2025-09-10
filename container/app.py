@@ -641,9 +641,8 @@ def probe_serial_open(port: str, baud: int | None = None):
         lower = msg.lower()
         if any(k in lower for k in ("permission", "denied", "operation not permitted")):
             msg = (
-                f"{msg} (hint: add --device {port}, "
-                "Extra Params: --device-cgroup-rule='c 166:* rmw' --device-cgroup-rule='c 188:* rmw' "
-                "--group-add=16, and map /dev/serial/by-id if available)"
+                f"{msg} (hint: map the device into the container using --device={port} or Unraid's Device field; "
+                "do not bind-mount the TTY. Also map /dev/serial/by-id (ro) and optionally set FANBRIDGE_SERIAL_PORT to the by-id path)"
             )
         try:
             logging.getLogger("fanbridge").warning(
