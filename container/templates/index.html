@@ -37,7 +37,16 @@
     }
     /* Theme variables */
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }
-    :root { --bg:#ffffff; --fg:#111827; --muted:#6b7280; --border:#e5e7eb; --thbg:#f6f8fa; --pillbg:#fafafa; --cardbg:#ffffff; }
+    /* Light theme (softer greys instead of pure white) */
+    :root {
+      --bg:#f3f4f6;        /* light grey background */
+      --fg:#111827;        /* near-black text */
+      --muted:#6b7280;     /* muted grey text */
+      --border:#d1d5db;    /* softer border */
+      --thbg:#eef2f7;      /* table header */
+      --pillbg:#eef2f7;    /* pill/button background */
+      --cardbg:#f8fafc;    /* card/panel background */
+    }
     body.dark { --bg:#0f172a; --fg:#e5e7eb; --muted:#94a3b8; --border:#334155; --thbg:#111827; --pillbg:#1f2937; --cardbg:#0b1220; }
     body { background: var(--bg); color: var(--fg); }
     .muted { color: var(--muted); }
@@ -81,9 +90,14 @@
     .kofi-overlay, #kofi-widget-overlay,
     body > div[id*="kofi"][style*="position: fixed"],
     body > div[class*="kofi"][style*="position: fixed"] { display:none !important; }
-    /* Header layout with non-floating logo */
-    .page-header { display:flex; align-items:center; justify-content: space-between; }
-    .site-logo { width: 100px; height: 100px; opacity: .95; object-fit: contain; margin-left: 12px; }
+    /* Header layout with logo on the left */
+    .page-header {
+      display:flex; align-items:center; justify-content:flex-start; gap:12px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 8px; margin-bottom: 14px;
+    }
+    .site-logo { width: 100px; height: 100px; opacity: .95; object-fit: contain; margin-right: 12px; margin-left: 0; }
+    .brand { font-size: 50px; }
     /* Floating Ko‑fi button (bottom-right) */
     #openModalBtn { position: fixed; right: 16px; bottom: 16px; z-index: 3000; display:block; cursor: pointer; background: transparent; border: none; padding: 0; }
     #openModalBtn img { height: 36px; width: auto; border:0; box-shadow: 0 6px 20px rgba(0,0,0,.25); border-radius: 6px; display:block; }
@@ -200,8 +214,8 @@
 </head>
 <body data-poll="{{ poll_s|int }}" data-version="{{ version or '—' }}">
   <div class="page-header">
-    <h1 class="brand">FanBridge for Unraid</h1>
     <img class="site-logo" src="{{ url_for('static', filename='fanbridge.png') }}" alt="FanBridge" />
+    <h1 class="brand">FanBridge for Unraid</h1>
   </div>
 
   <div class="meta flex">
@@ -463,6 +477,8 @@
 
   <div class="site-footer small">
     <a href="https://github.com/RoBro92/fanbridge" target="_blank" rel="noopener">GitHub</a>
+    &nbsp;|&nbsp;
+    <a href="https://github.com/RoBro92/fanbridge/wiki" target="_blank" rel="noopener">Wiki</a>
     &nbsp;|&nbsp;
     <a href="https://ko-fi.com/robro92" target="_blank" rel="noopener">Donate</a>
     &nbsp;|&nbsp;
@@ -835,13 +851,46 @@ function applyValidation(){
         const j = await r.json();
 
         const VERSION_FALLBACK = document.body.dataset.version || '—';
-        document.getElementById('ver').textContent = 'version: ' + (j.version || VERSION_FALLBACK);
+        const verEl = document.getElementById('ver');
+        verEl.textContent = 'version: ' + (j.version || VERSION_FALLBACK);
+        verEl.classList.remove('warn');
+        verEl.title = '';
         document.getElementById('pwm').textContent = (j.recommended_pwm ?? '—') + '%';
 
         const now = new Date();
         const updEl = document.getElementById('updated');
         updEl.textContent = 'updated: ' + now.toLocaleTimeString();
         updEl.title = 'FanBridge last fetched /api/status at: ' + now.toLocaleString();
+
+        // After status, query app version latest to update top version pill
+        try {
+          const rv = await fetchWithTimeout('/api/app/version', { cache: 'no-store' }, 8000);
+          const av = await rv.json();
+          if (av && verEl){
+            const cur = (av.current || j.version || VERSION_FALLBACK);
+            const repo = String(av.repo || 'RoBro92/fanbridge');
+            const repoUrl = `https://github.com/${repo}`;
+            const relUrl = (av.latest) ? `${repoUrl}/releases/tag/${encodeURIComponent(av.latest)}` : `${repoUrl}/releases/latest`;
+
+            verEl.textContent = 'version: ' + cur + (av.update_available ? ' (update available)' : '');
+            verEl.classList.remove('clickable');
+            verEl.removeAttribute('tabindex');
+            verEl.onclick = null;
+            verEl.onkeyup = null;
+
+            if (av.update_available){
+              verEl.classList.add('warn');
+              verEl.classList.add('clickable');
+              verEl.title = (av.latest ? `Latest: ${av.latest} — click to view release` : 'Click to view latest release');
+              verEl.setAttribute('tabindex', '0');
+              verEl.onclick = () => { try { window.open(relUrl, '_blank'); } catch(e){} };
+              verEl.onkeyup = (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { try { window.open(relUrl, '_blank'); } catch(e){} } };
+            } else {
+              verEl.classList.remove('warn');
+              verEl.title = '';
+            }
+          }
+        } catch(e) { /* ignore */ }
 
         // disks.ini mtime pill + banner logic
         const mtEl = document.getElementById('mtime');
