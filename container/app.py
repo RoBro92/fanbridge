@@ -856,20 +856,25 @@ def _serial_set_pwm_percent(value: Any) -> dict:
 
 # ---------- RP update helpers ----------
 def _has_cap_sys_admin() -> bool:
+    """Return True only if CAP_SYS_ADMIN is effective in this process.
+
+    The previous heuristic treated any non-zero CapEff as privileged and
+    even fell back to checking for /dev/disk/by-label, which can be present
+    in unprivileged containers via bind mounts. This precise check reads
+    CapEff from /proc/self/status, interprets it as a hex bitmask, and
+    returns True iff bit 21 (CAP_SYS_ADMIN) is set.
+    """
     try:
         with open("/proc/self/status", "r", encoding="utf-8", errors="ignore") as f:
             for ln in f:
                 if ln.startswith("CapEff:"):
-                    # Heuristic: non-zero indicates some caps; we can't decode bits reliably here
-                    val = ln.split(":", 1)[1].strip()
-                    return any(ch != "0" for ch in val)
+                    hexmask = ln.split(":", 1)[1].strip()
+                    # CapEff is hex; CAP_SYS_ADMIN is bit 21
+                    mask = int(hexmask, 16)
+                    return bool(mask & (1 << 21))
     except Exception:
         pass
-    # Fallback: presence of /dev/disk/by-label and ability to list
-    try:
-        return os.path.exists("/dev/disk/by-label")
-    except Exception:
-        return False
+    return False
 
 def _usb_info_for_port(port: str | None) -> dict:
     info: dict = {}

@@ -32,6 +32,18 @@ Run fanbridge easily via Docker or as an Unraid app:
 
 Install fanbridge directly through the Unraid Community Applications plugin for one-click deployment and management.
 
+### Local Dev Setup (VS Code / Pylance)
+
+To enable editor IntelliSense and fix missing import warnings (Flask, Werkzeug, dotenv, yaml), create a local virtualenv and install dev deps:
+
+```
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+```
+
+Then, in VS Code, select the interpreter at `.venv/bin/python` if not auto-picked. The workspace includes `.vscode/settings.json` that points to this venv.
+
 
 ## Roadmap / Planned Features
 
