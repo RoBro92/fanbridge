@@ -2,8 +2,8 @@ version: "3.9"
 
 services:
   fanbridge:
+    # Build (includes RELEASE.md in image)
     build:
-      # Build from repo root (includes RELEASE.md in image)
       context: .
       dockerfile: container/Dockerfile
     image: ghcr.io/robro92/fanbridge:latest
@@ -14,17 +14,15 @@ services:
     volumes:
       # Persist app config
       - ./dev-appdata:/config
-      # Recommended: expose stable USB serial symlinks for auto-detect (read-only)
+      # Optional: expose stable USB serial symlinks for auto-detect (ro)
       # - /dev/serial/by-id:/dev/serial/by-id:ro
-    # Clean unprivileged serial access: map the device explicitly (no privileged, no cgroup rules)
-    # Uncomment and set your device path (prefer by-id if available)
+      # Optional: map Unraid disks (preferred: map the directory)
+      # - /var/local/emhttp:/unraid:ro
+      #   (or bind the single file)
+      # - /var/local/emhttp/disks.ini:/unraid/disks.ini:ro
+    # Optional device mapping; leave blank if unplugged
     # devices:
     #   - "/dev/ttyACM0:/dev/ttyACM0"
     # environment:
     #   - FANBRIDGE_SERIAL_PORT=/dev/serial/by-id/usb-Your_Device
-    # Dev-only: live-edit templates/static (uncomment locally)
-    # - ./container/templates:/app/templates:ro
-    # - ./container/static:/app/static:ro
-    # Optional: map Unraid disks.ini
-    # - /var/local/emhttp/disks.ini:/unraid/disks.ini:ro
     restart: unless-stopped

@@ -1,13 +1,10 @@
 from flask import Flask, jsonify, request, render_template, session, redirect, url_for, make_response, g
-import os, time, yaml, configparser, glob, pathlib, logging, sys, datetime, secrets
+import os, time, yaml, glob, pathlib, logging, sys, datetime, secrets
 from typing import Protocol, runtime_checkable
-
-try:
-    import serial  # type: ignore
-    from serial.tools import list_ports  # type: ignore
-except Exception:
-    serial = None
-    list_ports = None
+from services import serial as serial_svc
+from api.serial import bp as serial_bp
+from api.appinfo import bp as appinfo_bp
+from api.logs import bp as logs_bp
 from werkzeug.security import generate_password_hash, check_password_hash
 
 try:
@@ -21,15 +18,7 @@ _PROJECT_ROOT = _BASE.parent
 
 @runtime_checkable
 class SerialProto(Protocol):
-    @property
-    def port(self) -> str | None: ...
-    # Minimal interface matching pyserial; common buffer-capable types
-    def write(self, b: bytes | bytearray | memoryview, /) -> int | None: ...
-    def flush(self) -> None: ...
-    def readline(self) -> bytes: ...
-    def close(self) -> None: ...
-    def reset_input_buffer(self) -> None: ...
-    def reset_output_buffer(self) -> None: ...
+    pass  # maintained for legacy type references; implementation moved to services.serial
 
 def _secret_path() -> pathlib.Path:
     # persist a stable session secret across restarts
@@ -102,69 +91,7 @@ if load_dotenv:
             pass
 
 # ---------- logging setup ----------
-# In-memory ring buffer for recent logs exposed via /api/logs
-try:
-    from collections import deque
-    import threading
-    _LOG_RING = deque(maxlen=2000)
-    _LOG_LOCK = threading.Lock()
-    _LOG_NEXT_ID = 1
-except Exception:
-    _LOG_RING = []  # type: ignore[assignment]
-    _LOG_LOCK = None  # type: ignore[assignment]
-    _LOG_NEXT_ID = 1
-
-class RingBufferHandler(logging.Handler):
-    def emit(self, record: logging.LogRecord) -> None:  # type: ignore[override]
-        try:
-            msg = record.getMessage()
-        except Exception:
-            msg = str(getattr(record, 'message', ''))
-        try:
-            global _LOG_NEXT_ID
-            item = {
-                "id": int(_LOG_NEXT_ID),
-                "ts": int(getattr(record, 'created', time.time())),
-                "level": str(record.levelname),
-                "name": str(record.name),
-                "msg": msg,
-            }
-            _LOG_NEXT_ID += 1
-            if _LOG_LOCK is not None:
-                with _LOG_LOCK:
-                    _LOG_RING.append(item)
-            else:
-                _LOG_RING.append(item)  # type: ignore[union-attr]
-        except Exception:
-            pass
-
-def _setup_logging():
-    lvl_name = os.environ.get("FANBRIDGE_LOG_LEVEL") or ("DEBUG" if os.environ.get("FLASK_DEBUG") else "INFO")
-    level = getattr(logging, str(lvl_name).upper(), logging.INFO)
-
-    root = logging.getLogger()
-    if not root.handlers:
-        handler = logging.StreamHandler(stream=sys.stdout)
-        fmt = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
-        handler.setFormatter(logging.Formatter(fmt))
-        root.addHandler(handler)
-    # Attach ring buffer handler once
-    try:
-        if not any(isinstance(h, RingBufferHandler) for h in root.handlers):
-            root.addHandler(RingBufferHandler())
-    except Exception:
-        pass
-    root.setLevel(level)
-
-    # Reduce noisy libraries; keep Flask startup line visible in debug
-    try:
-        if os.environ.get("FLASK_DEBUG"):
-            logging.getLogger("werkzeug").setLevel(logging.INFO)
-        else:
-            logging.getLogger("werkzeug").setLevel(logging.WARNING)
-    except Exception:
-        pass
-    logging.getLogger("urllib3").setLevel(logging.WARNING)
+from core.logging_setup import setup_logging as _setup_logging, RingBufferHandler, LOG_RING as _LOG_RING, LOG_LOCK as _LOG_LOCK
 
 _setup_logging()
 log = logging.getLogger("fanbridge")
@@ -211,40 +138,12 @@ def _audit(event: str, **data) -> None:
         pass
 
 # --------- Minimal Prometheus metrics ---------
-try:
-    import threading as _thr
-    _METRICS_LOCK = _thr.Lock()
-except Exception:
-    _METRICS_LOCK = None  # type: ignore[assignment]
-
-# Counters: http requests, serial opens, serial commands
-_METRICS_HTTP: dict[tuple[str, int], int] = {}
-_METRICS_SERIAL_CMD: dict[tuple[str, str], int] = {}
-_METRICS_SERIAL_OPEN_FAIL: int = 0
-
-def _m_inc_http(method: str, code: int) -> None:
-    key = (str(method).upper(), int(code))
-    if _METRICS_LOCK:
-        with _METRICS_LOCK:
-            _METRICS_HTTP[key] = _METRICS_HTTP.get(key, 0) + 1
-    else:
-        _METRICS_HTTP[key] = _METRICS_HTTP.get(key, 0) + 1
-
-def _m_inc_serial_cmd(kind: str, status: str) -> None:
-    key = (str(kind), str(status))
-    if _METRICS_LOCK:
-        with _METRICS_LOCK:
-            _METRICS_SERIAL_CMD[key] = _METRICS_SERIAL_CMD.get(key, 0) + 1
-    else:
-        _METRICS_SERIAL_CMD[key] = _METRICS_SERIAL_CMD.get(key, 0) + 1
-
-def _m_inc_serial_open_fail() -> None:
-    global _METRICS_SERIAL_OPEN_FAIL
-    if _METRICS_LOCK:
-        with _METRICS_LOCK:
-            _METRICS_SERIAL_OPEN_FAIL += 1
-    else:
-        _METRICS_SERIAL_OPEN_FAIL += 1
+import core.metrics as _metrics
+from core.metrics import (
+    m_inc_http as _m_inc_http,
+    m_inc_serial_cmd as _m_inc_serial_cmd,
+    m_inc_serial_open_fail as _m_inc_serial_open_fail,
+)
 
 def _read_version_from_release() -> str | None:
     # Extract version from RELEASE.md/CHANGELOG.md.
@@ -328,8 +227,13 @@ CONFIG_PATH = os.environ.get("FANBRIDGE_CONFIG") or _default_config_path()
 DISKS_INI = "/unraid/disks.ini"   # bind-mount to /var/local/emhttp/disks.ini on host
 USERS_PATH = "/config/users.yml" if _in_docker() else str((_BASE / "users.local.yml"))
 
-# Serial preference and baud configurable via environment; default locally to RP2040
-SERIAL_PREF = os.environ.get("FANBRIDGE_SERIAL_PORT", "").strip() or ("" if _in_docker() else _local_default_serial_port())
+# Serial preference and baud configurable via environment
+# - In Docker: assume RP2040 default at /dev/ttyACM0 (non-fatal if absent)
+# - Local dev: prefer a discovered macOS-style RP2040 path
+SERIAL_PREF = (
+    os.environ.get("FANBRIDGE_SERIAL_PORT", "").strip()
+    or ("/dev/ttyACM0" if _in_docker() else _local_default_serial_port())
+)
 SERIAL_BAUD = int(os.environ.get("FANBRIDGE_SERIAL_BAUD", "115200") or "115200")
 
 # Remember the last successfully opened port to survive re-enumeration (e.g., ACM0→ACM1)
@@ -341,6 +245,53 @@ try:
             "paths | config=%s users=%s disks_ini=%s exists=%s serial_pref=%s baud=%s",
             CONFIG_PATH, USERS_PATH, DISKS_INI, str(os.path.exists(DISKS_INI)).lower(), SERIAL_PREF, SERIAL_BAUD
         )
+        # If running in Docker and a preferred serial port is configured but missing, log an error once.
+        try:
+            if _in_docker() and SERIAL_PREF and not os.path.exists(SERIAL_PREF):
+                log.error(
+                    "preferred serial port not present | port=%s (map the device or plug it in)",
+                    SERIAL_PREF,
+                )
+        except Exception:
+            pass
+except Exception:
+    pass
+
+# App factory for WSGI servers
+def create_app():
+    # Register blueprints
+    try:
+        app.register_blueprint(serial_bp, url_prefix="/api/serial")
+    except Exception:
+        pass
+    # Provide app-wide context for blueprints (read-only values/functions)
+    app.config['FB_APP_INFO'] = {
+        'CONFIG_PATH': CONFIG_PATH,
+        'USERS_PATH': USERS_PATH,
+        'DISKS_INI': DISKS_INI,
+        'STARTED': STARTED,
+        'APP_VERSION': APP_VERSION,
+        'IN_DOCKER_FUNC': _in_docker,
+    }
+    try:
+        app.register_blueprint(appinfo_bp, url_prefix="/api")
+    except Exception:
+        pass
+    try:
+        app.register_blueprint(logs_bp, url_prefix="/api")
+    except Exception:
+        pass
+    return app
+
+# Initialize serial service context
+try:
+    serial_svc.init(
+        baud=SERIAL_BAUD,
+        preferred=SERIAL_PREF,
+        logger=log,
+        dbg_should=_dbg_should,
+        inc_open_fail=_m_inc_serial_open_fail,
+    )
 except Exception:
     pass
 
@@ -383,30 +334,7 @@ try:
 except Exception:
     DISKS_STALE_WARN_SEC = 1800
 
-def _is_bind_mounted_file(path: str) -> bool:
-    """Detect if a specific file path is used as a mountpoint (bind-mounted file).
-
-    When a single file on the host is bind-mounted into the container, and the
-    host atomically replaces that file (rename), the mount inside the container
-    can keep pointing at the old inode, so you won't see updates. Mapping the
-    parent directory instead avoids this.
-    """
-    try:
-        if os.path.isdir(path):
-            return False
-        with open("/proc/self/mountinfo", "r", encoding="utf-8", errors="ignore") as f:
-            for ln in f:
-                # The mount point is the 5th field (space-delimited) before the " - " separator
-                try:
-                    left = ln.split(" - ", 1)[0]
-                    fields = left.split()
-                    if len(fields) >= 5 and fields[4] == path:
-                        return True
-                except Exception:
-                    continue
-    except Exception:
-        return False
-    return False
+from services.disks import is_bind_mounted_file as _is_bind_mounted_file
 
 def _load_users() -> dict:
     try:
@@ -520,270 +448,9 @@ cfg = load_config()
 
     
 
-# ---------- Unraid disks.ini parsing ----------
-def _read_file(path: str) -> str | None:
-    try:
-        with open(path, "r") as f:
-            return f.read().strip()
-    except Exception:
-        return None
+from services.disks import read_unraid_disks
 
-# Helper to normalise/strip quotes from INI values
-def _unquote(s: str | None) -> str:
-    if s is None:
-        return ""
-    s = s.strip()
-    if len(s) >= 2 and ((s[0] == '"' and s[-1] == '"') or (s[0] == "'" and s[-1] == "'")):
-        s = s[1:-1]
-    return s.strip()
-
-def _sysfs(dev: str, rel: str) -> str | None:
-    d = _unquote(dev)
-    return _read_file(f"/sys/block/{d}/{rel}")
-
-def _spin_state_from_sysfs(dev: str) -> bool | None:
-    # Infer spin state from sysfs hints.
-    # Returns False if active, True if spun down, or None if unknown.
-    # Checks: device/state and power/runtime_status.
-    st = _sysfs(dev, "device/state")
-    if st:
-        s = st.lower()
-        if "running" in s or "active" in s:
-            return False
-        if "offline" in s or "suspended" in s or "standby" in s:
-            return True
-
-    rs = _sysfs(dev, "power/runtime_status")
-    if rs:
-        r = rs.lower()
-        if "active" in r:
-            return False
-        if "suspend" in r:
-            return True
-    return None
-
-def _nvme_temp_sysfs(dev: str) -> int | None:
-    # Read NVMe temperature from sysfs when disks.ini reports unknown ('*').
-    # Looks for hwmon temp*_input attached to the NVMe controller.
-    ctrl = dev.split("n", 1)[0]
-    candidates = glob.glob(f"/sys/class/nvme/{ctrl}/device/hwmon/hwmon*/temp*_input")
-    for p in candidates:
-        val = _read_file(p)
-        if val and val.strip().isdigit():
-            n = int(val.strip())
-            if n > 1000:
-                n = n // 1000
-            if 0 <= n <= 120:
-                return n
-    return None
-
-def _is_hdd(dev_name: str) -> bool:
-    d = _unquote(dev_name)
-    if d.startswith("nvme"):
-        return False
-    rot = _read_file(f"/sys/block/{d}/queue/rotational")
-    if rot is not None:
-        return rot.strip() == "1"   
-    return True
-
-# ---------- Unraid disks.ini parsing ----------
-def _read_disks_ini() -> list[dict]:
-    # Parse Unraid's /var/local/emhttp/disks.ini (bind-mounted to /unraid/disks.ini).
-    # Returns a list of drive dicts: dev, type, temp, state, excluded.
-    if not os.path.exists(DISKS_INI):
-        return []
-
-    # Disable interpolation so any '%' in values doesn't explode.
-    cp = configparser.ConfigParser(interpolation=None)
-    try:
-        cp.read(DISKS_INI, encoding="utf-8")
-    except Exception as e:
-        log.exception("Failed to parse %s: %s", DISKS_INI, e)
-        return []
-
-    drives: list[dict] = []
-    excludes = set(cfg.get("exclude_devices") or [])
-
-    for section in cp.sections():
-        dev = _unquote(cp.get(section, "device", fallback=""))
-        slot = _unquote(cp.get(section, "name", fallback=""))
-        if not dev:
-            continue
-        temp_raw = _unquote(cp.get(section, "temp", fallback=""))
-        temp: int | None = None
-        if temp_raw.isdigit():
-            t = int(temp_raw)
-            if 0 <= t <= 120:
-                temp = t
-
-        spundown = _unquote(cp.get(section, "spundown", fallback="0")) == "1"
-
-        ss = _spin_state_from_sysfs(dev)
-        if (spundown is False) and (ss is True):
-            spundown = True
-        # Otherwise leave 'spundown' as reported by disks.ini.
-
-        # If temp is unknown for NVMe but device is active, try sysfs
-        dclean = _unquote(dev)
-        if temp is None and dclean.startswith("nvme") and not spundown:
-            t_nv = _nvme_temp_sysfs(dclean)
-            if isinstance(t_nv, int):
-                temp = t_nv
-
-        dtype = "SSD" if not _is_hdd(dclean) else "HDD"
-        if dtype == "HDD":
-            state = "down" if spundown else "up"
-        else:
-            state = "spun down" if spundown else ("on" if temp is not None else "N/A")
-        drives.append({
-            "dev": dclean,
-            "slot": slot,
-            "type": dtype,
-            "temp": temp,
-            "state": state,
-            "excluded": (dclean in excludes),
-        })
-    return drives
-
-# ---------- Serial helpers ----------
-def _unique_order(seq):
-    seen = set()
-    out = []
-    for x in seq:
-        if x and x not in seen:
-            out.append(x)
-            seen.add(x)
-    return out
-
-    # Ordered, de-duplicated serial device candidates inside the container.
-def list_serial_ports():
-    candidates = []
-    # Prefer stable udev by-id links if the host mapped them
-    candidates.extend(sorted(glob.glob("/dev/serial/by-id/*")))
-    # Common CDC ACM and USB serial nodes
-    candidates.extend(sorted(glob.glob("/dev/ttyACM*")))
-    candidates.extend(sorted(glob.glob("/dev/ttyUSB*")))
-    # pyserial discovery (best-effort)
-    if list_ports:
-        try:
-            for p in list_ports.comports():
-                dev = p.device or ""
-                # Only include USB-like CDC ports; avoid TTY serial consoles (ttyS*)
-                if dev.startswith("/dev/serial/by-id/") or dev.startswith("/dev/ttyACM") or dev.startswith("/dev/ttyUSB"):
-                    candidates.append(dev)
-        except Exception:
-            pass
-    return _unique_order(candidates)
-
-    # Quick open/close to verify device access without committing to a protocol.
-def probe_serial_open(port: str, baud: int | None = None):
-    if not port:
-        return False, "no port specified"
-    # Avoid treating system serial consoles as valid devices
-    if port.startswith("/dev/ttyS"):
-        return False, "not a USB CDC device"
-    if serial is None:
-        return False, "pyserial not available"
-    try:
-        s = serial.Serial(port=port, baudrate=baud or SERIAL_BAUD, timeout=0.2)
-        try:
-            ok = True
-        finally:
-            s.close()
-        return ok, "ok"
-    except Exception as e:
-        msg = str(e)
-        # macOS: if a tty device fails, retry the matching cu device
-        try:
-            if port.startswith("/dev/tty."):
-                cu_port = "/dev/cu." + port.split("/dev/tty.", 1)[1]
-                if os.path.exists(cu_port):
-                    s2 = serial.Serial(port=cu_port, baudrate=baud or SERIAL_BAUD, timeout=0.2)
-                    try:
-                        ok2 = True
-                    finally:
-                        s2.close()
-                    return ok2, f"ok ({cu_port})"
-        except Exception:
-            pass
-        # Permission hints
-        lower = msg.lower()
-        if any(k in lower for k in ("permission", "denied", "operation not permitted")):
-            msg = (
-                f"{msg} (hint: map the device into the container using --device={port} or Unraid's Device field; "
-                "do not bind-mount the TTY. Also map /dev/serial/by-id (ro) and optionally set FANBRIDGE_SERIAL_PORT to the by-id path)"
-            )
-        try:
-            logging.getLogger("fanbridge").warning(
-                "serial open failed | port=%s baud=%s err=%s", port, baud or SERIAL_BAUD, msg
-            )
-            try:
-                _m_inc_serial_open_fail()
-            except Exception:
-                pass
-        except Exception:
-            pass
-        return False, msg
-
-    # Build serial status for /api/serial/status and embed in /api/status.
-def get_serial_status(full: bool = True):
-    ports = list_serial_ports()
-    preferred = _preferred_serial_port()
-    available = bool(ports)
-    connected = False
-    message = "no ports detected"
-
-    if preferred:
-        ok, msg = probe_serial_open(preferred, SERIAL_BAUD)
-        connected = ok
-        message = msg
-        if not ok and available:
-            # try any other port
-            for p in ports:
-                if p == preferred:
-                    continue
-                o2, m2 = probe_serial_open(p, SERIAL_BAUD)
-                if o2:
-                    preferred = p
-                    connected = True
-                    message = m2
-                    try:
-                        globals()["_SERIAL_LAST_GOOD"] = p
-                    except Exception:
-                        pass
-                    break
-        if not connected:
-            try:
-                lvl = logging.WARNING if any(s in str(message).lower() for s in ("denied", "permission", "not opened", "busy", "no such device")) else logging.INFO
-                logging.getLogger("fanbridge").log(
-                    lvl,
-                    "serial not connected | port=%s baud=%s reason=%s (map device and grant permissions)",
-                    preferred, SERIAL_BAUD, message,
-                )
-            except Exception:
-                pass
-    elif available:
-        message = "ports detected but none selected"
-
-    data = {
-        "preferred": preferred,
-        "ports": ports if full else None,
-        "available": available,
-        "connected": (connected and not (preferred or "").startswith("/dev/ttyS")),
-        "baud": SERIAL_BAUD,
-        "message": message,
-    }
-    if not full:
-        data.pop("ports", None)
-    try:
-        if _dbg_should("serial", 8):
-            logging.getLogger("fanbridge").debug(
-                "serial | preferred=%s available=%s connected=%s baud=%s msg=%s ports=%s",
-                data.get("preferred"), data.get("available"), data.get("connected"), data.get("baud"), data.get("message"), len(ports)
-            )
-    except Exception:
-        pass
-    return data
+    # Serial helpers moved to services.serial
 
 # ---------- Auto-apply PWM state ----------
 _AUTO_LAST_DUTY: int | None = None
@@ -794,99 +461,6 @@ _AUTO_PAUSED_MSG: str | None = None
 # ---------- Serial send helpers used by API ----------
 #
 # get currently preferred port (same logic as get_serial_status)
-def _choose_best_port(candidates: list[str]) -> str:
-    # Prefer stable by-id links if present
-    byid = [p for p in candidates if "/serial/by-id/" in p]
-    if byid:
-        return byid[0]
-    return candidates[0] if candidates else ""
-
-def _preferred_serial_port() -> str:
-    ports = list_serial_ports()
-    # If last good is still present, stick to it
-    if globals().get("_SERIAL_LAST_GOOD") and globals()["_SERIAL_LAST_GOOD"] in ports:
-        return str(globals()["_SERIAL_LAST_GOOD"])  # type: ignore
-    # If env preference exists and is present, use it, else fall back to best available
-    if SERIAL_PREF and os.path.exists(SERIAL_PREF):
-        return SERIAL_PREF
-    return _choose_best_port(ports)
-
-# --- change this signature (around the _open_serial definition) ---
-def _open_serial(port: str | None = None, baud: int | None = None, timeout: float = 1.0) -> tuple[SerialProto | None, str | None]:
-    # returns (ser, error_message_or_None)
-    if serial is None:
-        return None, "pyserial not available"
-    # Build a small candidate list to tolerate re-enumeration
-    ports = list_serial_ports()
-    cand = []
-    if port:
-        cand.append(port)
-    pref = _preferred_serial_port()
-    if pref:
-        cand.append(pref)
-    cand.extend(ports)
-    tried = set()
-    for p in _unique_order(cand):
-        if not p or p in tried:
-            continue
-        tried.add(p)
-        try:
-            s = serial.Serial(port=p, baudrate=baud or SERIAL_BAUD, timeout=timeout)
-            s_proto: SerialProto = s  # structural typing for Pylance
-            try:
-                s_proto.reset_input_buffer()
-                s_proto.reset_output_buffer()
-            except Exception:
-                pass
-            # remember last good
-            try:
-                globals()["_SERIAL_LAST_GOOD"] = getattr(s_proto, "port", p)
-            except Exception:
-                pass
-            return s_proto, None
-        except Exception as e:
-            msg = str(e)
-            # continue trying other candidates on transient errors
-            last_err = msg
-            continue
-    # If we got here, nothing opened
-    try:
-        log.warning("serial open failed | port=%s baud=%s err=%s", (port or pref or ""), baud or SERIAL_BAUD, locals().get("last_err") or "no candidates")
-    except Exception:
-        pass
-    return None, (locals().get("last_err") or "no serial ports detected")
-
-# --- optionally, let _serial_send_line request a shorter timeout ---
-def _serial_send_line(line: str, expect_reply: bool = True, timeout: float = 1.0) -> dict:
-    # writes a single line (adds '\n'), optionally reads one reply line
-    out = {"ok": False, "port": None, "echo": line, "reply": None, "error": None}
-    s, err = _open_serial(timeout=timeout)   # <-- pass timeout through
-    if err:
-        out["error"] = err
-        return out
-    if s is None:
-        out["error"] = "serial not available"
-        return out
-    out["port"] = (s.port if hasattr(s, "port") else None)
-    try:
-        payload = (line or "").strip() + "\n"
-        data = payload.encode("utf-8", errors="ignore")
-        s.write(data)
-        s.flush()
-        if expect_reply:
-            resp = s.readline().decode("utf-8", errors="ignore").strip()
-            out["reply"] = resp if resp else None
-        out["ok"] = True
-        return out
-    except Exception as e:
-        out["error"] = str(e)
-        return out
-    finally:
-        try:
-            s.close()
-        except Exception:
-            pass
-
 from typing import Any
 import json as _json
 import urllib.request
@@ -895,36 +469,6 @@ import tempfile
 import shutil
 import subprocess
 import stat
-
-def _serial_set_pwm_byte(value: Any) -> dict:
-    # Legacy helper: clamps 0..255 and converts to 0..100 then sends as raw line
-    if not isinstance(value, (int, float, str)):
-        return {"ok": False, "error": "invalid value"}
-    try:
-        v = int(value)
-    except Exception:
-        return {"ok": False, "error": "invalid value"}
-    if v < 0: v = 0
-    if v > 255: v = 255
-    # Convert raw duty (0..255) to 0..100 percentage expected by controller
-    pct = int(round((v * 100) / 255))
-    res = _serial_send_line(str(pct), expect_reply=True)
-    res["value"] = pct
-    return res
-
-def _serial_set_pwm_percent(value: Any) -> dict:
-    # New helper: clamps 0..100 and sends as a single number line
-    if not isinstance(value, (int, float, str)):
-        return {"ok": False, "error": "invalid value"}
-    try:
-        v = int(value)
-    except Exception:
-        return {"ok": False, "error": "invalid value"}
-    if v < 0: v = 0
-    if v > 100: v = 100
-    res = _serial_send_line(str(v), expect_reply=True)
-    res["value"] = v
-    return res
 
 
 # ---------- RP update helpers ----------
@@ -1113,28 +657,38 @@ def compute_status():
     global cfg
     cfg = load_config()
 
-    # Prefer Unraid's disks.ini (no privileges required)
+    # Production: prefer Unraid's disks.ini; do not fabricate drives in Docker.
+    # Local dev (not in Docker) may still use the sim data in config for testing.
     if os.path.exists(DISKS_INI):
-        mode = "disks.ini"
-        drives = _read_disks_ini()
+        mode = "unraid"
+        try:
+            excludes = set(cfg.get("exclude_devices") or [])
+        except Exception:
+            excludes = set()
+        drives = read_unraid_disks(DISKS_INI, excludes)
     else:
-        # sim (for non-Unraid local testing)
-        mode = "sim"
-        drives = []
-        for d in (cfg.get("sim", {}).get("drives", []) or []):
-            _dtype = d.get("type", "HDD")
-            _temp = d.get("temp")
-            if _dtype == "HDD":
-                _state = "down" if _temp is None else "up"
-            else:
-                _state = "spun down" if _temp is None else "on"
-            drives.append({
-                "dev": d.get("name"),
-                "type": _dtype,
-                "temp": _temp,
-                "state": _state,
-                "excluded": False,
-            })
+        if _in_docker():
+            # In Docker with no disks.ini mapped: run with empty drives (fallback PWM logic applies)
+            mode = "unraid-missing"
+            drives = []
+        else:
+            # Local dev-only: allow sim
+            mode = "sim"
+            drives = []
+            for d in (cfg.get("sim", {}).get("drives", []) or []):
+                _dtype = d.get("type", "HDD")
+                _temp = d.get("temp")
+                if _dtype == "HDD":
+                    _state = "down" if _temp is None else "up"
+                else:
+                    _state = "spun down" if _temp is None else "on"
+                drives.append({
+                    "dev": d.get("name"),
+                    "type": _dtype,
+                    "temp": _temp,
+                    "state": _state,
+                    "excluded": False,
+                })
 
     # log any N/A for visibility
     for d in drives:
@@ -1172,7 +726,10 @@ def compute_status():
         if os.path.exists(DISKS_INI):
             disks_mtime = int(os.path.getmtime(DISKS_INI))
         else:
-            _warn_once("disks_ini_missing", f"Could not read {DISKS_INI}; running in sim mode. Map /var/local/emhttp/disks.ini -> /unraid/disks.ini (ro)")
+            _warn_once(
+                "disks_ini_missing",
+                f"Could not read {DISKS_INI}; Unraid mapping missing. Map /var/local/emhttp -> /unraid:ro or bind /var/local/emhttp/disks.ini -> /unraid/disks.ini:ro",
+            )
     except Exception as e:
         try:
             logging.getLogger("fanbridge").warning("Failed to stat %s: %s", DISKS_INI, e)
@@ -1187,7 +744,7 @@ def compute_status():
     if auto_enabled:
         try:
             # Only attempt if serial looks connected
-            sstat = get_serial_status(full=False)
+            sstat = serial_svc.get_serial_status(full=False)
             if not sstat.get("connected"):
                 auto_paused_msg = "controller not connected"
             else:
@@ -1204,7 +761,7 @@ def compute_status():
                 delta_ok = (_AUTO_LAST_DUTY is None) or (abs(duty - int(_AUTO_LAST_DUTY)) >= max(0, hyst))
                 ivl_ok = (_AUTO_LAST_TS is None) or ((now_ts - float(_AUTO_LAST_TS)) >= max(1, min_ivl))
                 if delta_ok and ivl_ok:
-                    res = _serial_set_pwm_percent(pct)
+                    res = serial_svc.serial_set_pwm_percent(pct)
                     if res.get("ok"):
                         auto_last_duty = duty
                         auto_last_ts = now_ts
@@ -1289,255 +846,7 @@ def api_auto_apply():
     # If disabling, do not clear last duty/time so UI can display history
     return jsonify({"ok": True, "auto_apply": enable})
 
-# Logs API: tail recent logs and control runtime level
-_LEVELS = {
-    "DEBUG": logging.DEBUG,
-    "NORMAL": logging.INFO,  # alias for INFO (warnings/errors always included)
-    "INFO": logging.INFO,
-    "WARNING": logging.WARNING,
-    "ERROR": logging.ERROR,
-    "CRITICAL": logging.CRITICAL,
-}
-
-def _level_from_str(s: str | None, default=logging.INFO) -> int:
-    if not s:
-        return int(default)
-    return int(_LEVELS.get(str(s).upper(), int(default)))
-
-@app.get("/api/logs")
-def api_logs():
-    try:
-        since = int(request.args.get("since", "0") or "0")
-    except Exception:
-        since = 0
-    min_level = _level_from_str(request.args.get("min_level"), default=logging.DEBUG)
-    limit = 500
-    try:
-        limit = max(1, min(1000, int(request.args.get("limit", "500") or "500")))
-    except Exception:
-        pass
-    items = []
-    last_id = since
-    try:
-        src = list(_LOG_RING) if isinstance(_LOG_RING, list) else list(_LOG_RING)
-        for it in src:
-            if int(it.get("id", 0)) <= since:
-                continue
-            lvl = str(it.get("level", "INFO")).upper()
-            if _LEVELS.get(lvl, 0) < min_level:
-                continue
-            items.append(it)
-            last_id = int(it.get("id", last_id))
-            if len(items) >= limit:
-                break
-    except Exception:
-        pass
-    return jsonify({
-        "ok": True,
-        "items": items,
-        "last_id": last_id,
-        "level": logging.getLogger().level,
-    })
-
-@app.post("/api/log_level")
-def api_log_level():
-    data = request.get_json(force=True, silent=True) or {}
-    level_name = str(data.get("level", "INFO")).upper()
-    # Map friendly aliases
-    canonical = "INFO" if level_name == "NORMAL" else level_name
-    lvl = _LEVELS.get(canonical)
-    if lvl is None:
-        return jsonify({"ok": False, "error": "invalid level"}), 400
-    logging.getLogger().setLevel(lvl)
-    try:
-        c = load_config()
-        c["log_level"] = canonical
-        save_config(c)
-    except Exception:
-        pass
-    return jsonify({"ok": True, "level": canonical})
-
-@app.post("/api/logs/clear")
-def api_logs_clear():
-    try:
-        count = 0
-        if _LOG_LOCK is not None:
-            with _LOG_LOCK:
-                count = len(_LOG_RING)  # type: ignore[arg-type]
-                _LOG_RING.clear()       # type: ignore[union-attr]
-        else:
-            count = len(_LOG_RING)      # type: ignore[arg-type]
-            _LOG_RING.clear()           # type: ignore[union-attr]
-        return jsonify({"ok": True, "cleared": count})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-@app.get("/api/logs/download")
-def api_logs_download():
-    fmt = (request.args.get("format", "text") or "text").lower()
-    min_level = _level_from_str(request.args.get("min_level"), default=logging.DEBUG)
-    # Optional time window filters (epoch seconds or ISO 8601)
-    def _parse_ts(val: str | None) -> int | None:
-        if not val:
-            return None
-        s = val.strip()
-        try:
-            # epoch seconds
-            return int(float(s))
-        except Exception:
-            pass
-        try:
-            # ISO like YYYY-MM-DDTHH:MM
-            return int(datetime.datetime.fromisoformat(s).timestamp())
-        except Exception:
-            return None
-    from_ts = _parse_ts(request.args.get("from_ts"))
-    to_ts = _parse_ts(request.args.get("to_ts"))
-    try:
-        src = list(_LOG_RING) if isinstance(_LOG_RING, list) else list(_LOG_RING)
-    except Exception:
-        src = []
-    items = []
-    for it in src:
-        lvl = str(it.get("level", "INFO")).upper()
-        if _LEVELS.get(lvl, 0) < min_level:
-            continue
-        try:
-            its = int(it.get("ts", 0))
-        except Exception:
-            its = 0
-        if from_ts is not None and its < from_ts:
-            continue
-        if to_ts is not None and its > to_ts:
-            continue
-        items.append(it)
-    # Build diagnostics bundle
-    def _collect_diagnostics() -> dict:
-        import platform as _platform
-        info: dict = {}
-        # basics
-        info["timestamp_utc"] = datetime.datetime.utcnow().isoformat(timespec='seconds')
-        info["uptime_s"] = int(time.time() - STARTED)
-        info["version"] = APP_VERSION
-        info["in_docker"] = _in_docker()
-        try:
-            info["python"] = sys.version.split()[0]
-            info["platform"] = f"{sys.platform} | {_platform.platform()}"
-        except Exception:
-            pass
-        # paths
-        try:
-            info["paths"] = {
-                "config": {"path": CONFIG_PATH, "exists": os.path.exists(CONFIG_PATH)},
-                "users":  {"path": USERS_PATH,  "exists": os.path.exists(USERS_PATH)},
-                "disks_ini": {
-                    "path": DISKS_INI,
-                    "exists": os.path.exists(DISKS_INI),
-                    "mtime": int(os.path.getmtime(DISKS_INI)) if os.path.exists(DISKS_INI) else None,
-                },
-            }
-        except Exception:
-            pass
-        # environment (limited to FANBRIDGE_*)
-        try:
-            info["env"] = {k: v for (k, v) in os.environ.items() if k.upper().startswith("FANBRIDGE_")}
-        except Exception:
-            pass
-        # serial status + controller version probe (best-effort)
-        try:
-            info["serial_status"] = get_serial_status(full=True)
-        except Exception as e:
-            info["serial_status"] = {"error": str(e)}
-        try:
-            vres = _serial_send_line("version", expect_reply=True)
-            info["controller_version_reply"] = vres.get("reply")
-        except Exception:
-            pass
-        # mounts (subset)
-        try:
-            mounts: list[str] = []
-            with open("/proc/mounts", "r", encoding="utf-8", errors="ignore") as f:
-                for ln in f.readlines()[:500]:
-                    if any(tag in ln for tag in ("/config", "/unraid", "/proc", "/sys", "/")):
-                        mounts.append(ln.strip())
-            info["mounts"] = mounts
-        except Exception:
-            info["mounts"] = []
-        return info
-
-    diagnostics = _collect_diagnostics()
-
-    # Build response with attachment headers
-    ts = datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
-    filename = f"fanbridge-logs-{ts}.{ 'json' if fmt == 'json' else 'txt' }"
-    if fmt == "json":
-        import json as _json
-        payload = {"ok": True, "diagnostics": diagnostics, "items": items}
-        resp = make_response(_json.dumps(payload, ensure_ascii=False))
-        resp.headers["Content-Type"] = "application/json; charset=utf-8"
-    else:
-        # Plaintext: one line per log
-        lines = []
-        # diagnostics header
-        lines.append("==== FanBridge Diagnostics ====")
-        lines.append(f"Timestamp (UTC): {diagnostics.get('timestamp_utc')}")
-        lines.append(f"Uptime (s): {diagnostics.get('uptime_s')}")
-        lines.append(f"Version: {diagnostics.get('version')}")
-        lines.append(f"In Docker: {diagnostics.get('in_docker')}")
-        py = diagnostics.get('python'); plat = diagnostics.get('platform')
-        lines.append(f"Python: {py} | Platform: {plat}")
-        # paths summary
-        try:
-            p = diagnostics.get('paths', {})
-            lines.append("Paths:")
-            for key in ("config", "users", "disks_ini"):
-                item = p.get(key, {}) if isinstance(p, dict) else {}
-                lines.append(f"  - {key}: {item.get('path')} exists={item.get('exists')} mtime={item.get('mtime')}")
-        except Exception:
-            pass
-        # env summary
-        try:
-            env = diagnostics.get('env', {}) or {}
-            if env:
-                lines.append("Env (FANBRIDGE_*):")
-                for k, v in env.items():
-                    lines.append(f"  {k}={v}")
-        except Exception:
-            pass
-        # serial summary
-        try:
-            ss = diagnostics.get('serial_status', {}) or {}
-            lines.append("Serial:")
-            lines.append(f"  connected={ss.get('connected')} preferred={ss.get('preferred')} baud={ss.get('baud')} message={ss.get('message')}")
-            ports = ss.get('ports') or []
-            if ports:
-                lines.append(f"  ports: {', '.join(ports[:12])}{' ...' if len(ports)>12 else ''}")
-            cv = diagnostics.get('controller_version_reply')
-            if cv:
-                lines.append(f"  controller version: {cv}")
-        except Exception:
-            pass
-        # mounts subset
-        try:
-            m = diagnostics.get('mounts') or []
-            if m:
-                lines.append("Mounts:")
-                for ln in m[:50]:
-                    lines.append(f"  {ln}")
-        except Exception:
-            pass
-        lines.append("==== End Diagnostics ====")
-        lines.append("")
-        for it in items:
-            try:
-                t = datetime.datetime.fromtimestamp(int(it.get("ts", 0))).isoformat(timespec='seconds')
-            except Exception:
-                t = str(it.get("ts", ""))
-            lines.append(f"{t} | {it.get('level','')} | {it.get('name','')} | {it.get('msg','')}")
-        resp = make_response("\n".join(lines) + ("\n" if lines else ""))
-        resp.headers["Content-Type"] = "text/plain; charset=utf-8"
-    resp.headers["Content-Disposition"] = f"attachment; filename=\"{filename}\""
-    return resp
+## moved: /api/logs*, /api/log_level handled by api.logs blueprint
 
 @app.after_request
 def add_no_cache(resp):
@@ -1562,90 +871,7 @@ def add_no_cache(resp):
         pass
     return resp
 
-# --------- API: App version + latest release ---------
-_APP_VER_CACHE: dict | None = None
-
-def _parse_semver_tuple(v: str) -> tuple:
-    try:
-        core = str(v or '').strip().lstrip('vV')
-        parts = core.split('-')[0]
-        nums = [int(x) for x in parts.split('.') if x.isdigit()]
-        return tuple(nums + [0] * (3 - len(nums)))
-    except Exception:
-        return (0, 0, 0)
-
-def _latest_github_release(repo: str, timeout: float = 6.0) -> str | None:
-    # repo like "owner/name"
-    url = f"https://api.github.com/repos/{repo}/releases/latest"
-    data = _http_get_json(url, timeout=timeout)
-    if isinstance(data, dict):
-        tag = data.get('tag_name') or data.get('name')
-        if isinstance(tag, str) and tag.strip():
-            return tag.strip()
-    return None
-
-@app.get("/api/app/version")
-def api_app_version():
-    global _APP_VER_CACHE
-    repo = os.environ.get("FANBRIDGE_REPO", "RoBro92/fanbridge")
-    now = time.time()
-    latest = None
-    # best-effort cache 5 minutes
-    try:
-        if _APP_VER_CACHE and (now - float(_APP_VER_CACHE.get('ts', 0))) < 300:
-            latest = _APP_VER_CACHE.get('latest')
-        else:
-            latest = _latest_github_release(repo)
-            _APP_VER_CACHE = { 'ts': now, 'latest': latest }
-    except Exception:
-        latest = None
-    current = APP_VERSION or None
-    update = False
-    try:
-        if current and latest:
-            update = _parse_semver_tuple(str(latest)) > _parse_semver_tuple(str(current))
-    except Exception:
-        update = False
-    return jsonify({
-        'ok': True,
-        'current': current,
-        'latest': latest,
-        'repo': repo,
-        'update_available': bool(update),
-    })
-
-@app.get("/metrics")
-def metrics():
-    # Prometheus text exposition format
-    lines: list[str] = []
-    lines.append("# HELP fanbridge_http_requests_total HTTP requests by method and code")
-    lines.append("# TYPE fanbridge_http_requests_total counter")
-    try:
-        items = list(_METRICS_HTTP.items())
-    except Exception:
-        items = []
-    for (method, code), val in items:
-        lines.append(f"fanbridge_http_requests_total{{method=\"{method}\",code=\"{code}\"}} {int(val)}")
-
-    lines.append("# HELP fanbridge_serial_commands_total Serial commands by kind and status")
-    lines.append("# TYPE fanbridge_serial_commands_total counter")
-    try:
-        sc = list(_METRICS_SERIAL_CMD.items())
-    except Exception:
-        sc = []
-    for (kind, status), val in sc:
-        lines.append(f"fanbridge_serial_commands_total{{kind=\"{kind}\",status=\"{status}\"}} {int(val)}")
-
-    lines.append("# HELP fanbridge_serial_open_failures_total Serial open failures")
-    lines.append("# TYPE fanbridge_serial_open_failures_total counter")
-    try:
-        lines.append(f"fanbridge_serial_open_failures_total {int(_METRICS_SERIAL_OPEN_FAIL)}")
-    except Exception:
-        lines.append("fanbridge_serial_open_failures_total 0")
-
-    resp = make_response("\n".join(lines) + "\n")
-    resp.headers["Content-Type"] = "text/plain; version=0.0.4; charset=utf-8"
-    return resp
+## moved: /api/app/version and /metrics handled by api.appinfo blueprint
 
 # Request timing + logging
 @app.before_request
@@ -1795,7 +1021,7 @@ def index():
 def status():
     data = compute_status()
     try:
-        ss = get_serial_status(full=False)
+        ss = serial_svc.get_serial_status(full=False)
         data["serial"] = {
             "preferred": ss.get("preferred"),
             "available": ss.get("available"),
@@ -1812,18 +1038,18 @@ def status():
 # --------- API: Serial status ---------
 @app.get("/api/serial/status")
 def serial_status():
-    return jsonify(get_serial_status(full=True))
+    return jsonify(serial_svc.get_serial_status(full=True))
 
 # --- new quick tools endpoint; add below /api/serial/status ---
 @app.get("/api/serial/tools")
 def api_serial_tools():
     # Always return fast: include status + an optional quick PING probe.
-    status = get_serial_status(full=True)
+    status = serial_svc.get_serial_status(full=True)
     checks = {"ping": {"ok": False, "ms": None, "reply": None, "error": None}}
     if status.get("connected"):
         t0 = time.time()
         # Short timeout so UI never hangs long
-        res = _serial_send_line("PING", expect_reply=True, timeout=0.5)
+        res = serial_svc.serial_send_line("PING", expect_reply=True, timeout=0.5)
         dt = int((time.time() - t0) * 1000)
         if res.get("ok"):
             checks["ping"] = {
@@ -1858,7 +1084,7 @@ def api_serial_send():
     if not line:
         return jsonify({"ok": False, "error": "missing line"}), 400
 
-    res = _serial_send_line(line, expect_reply=True)
+    res = serial_svc.serial_send_line(line, expect_reply=True)
     # log succinctly
     if res.get("ok"):
         log.info("serial send | port=%s echo=%r reply=%r", res.get("port"), line, res.get("reply"))
@@ -1879,7 +1105,7 @@ def api_serial_pwm():
     if "value" not in data:
         return jsonify({"ok": False, "error": "missing value"}), 400
     # Accept 0..100% from client
-    res = _serial_set_pwm_percent(data.get("value"))
+    res = serial_svc.serial_set_pwm_percent(data.get("value"))
     if res.get("ok"):
         log.info("serial pwm | port=%s value=%s reply=%r", res.get("port"), res.get("value"), res.get("reply"))
         try: _m_inc_serial_cmd("pwm", "ok")
@@ -1902,16 +1128,16 @@ def api_rp_status():
     board = rp_cfg.get("board") or "rp2040"
 
     # Serial + controller version
-    sstat = get_serial_status(full=True)
+    sstat = serial_svc.get_serial_status(full=True)
     ver = None
     if sstat.get("connected"):
         try:
-            vres = _serial_send_line("version", expect_reply=True, timeout=0.5)
+            vres = serial_svc.serial_send_line("version", expect_reply=True, timeout=0.5)
             if vres.get("ok"):
                 ver = (vres.get("reply") or "").strip() or None
         except Exception:
             pass
-    usb = _usb_info_for_port(sstat.get("preferred"))
+    usb = serial_svc.usb_info_for_port(sstat.get("preferred"))
 
     # Try to fetch repo manifest (optional)
     manifest_url = repo_url.rstrip("/") + "/manifest.json"
@@ -2000,7 +1226,7 @@ def api_rp_flash():
         board = (data.get("board") or "rp2040").strip()
         version = (data.get("version") or "").strip() or None
         # Ensure we have serial connection to trigger BOOTSEL
-        sstat = get_serial_status(full=True)
+        sstat = serial_svc.get_serial_status(full=True)
         if not sstat.get("connected"):
             logstep("controller not connected", ok=False)
             return jsonify({"ok": False, "error": "controller not connected", "progress": steps}), 400
@@ -2032,7 +1258,7 @@ def api_rp_flash():
 
         # 1) Reboot controller into BOOTSEL
         logstep("sending BOOTSEL")
-        _serial_send_line("BOOTSEL", expect_reply=False)
+        serial_svc.serial_send_line("BOOTSEL", expect_reply=False)
         # Small grace period for USB disconnect
         time.sleep(0.6)
         # 2) Poll for RPI-RP2 block device (preferred path, by-label or probed)
@@ -2098,7 +1324,7 @@ def api_rp_flash():
             t_end = time.time() + 30.0
             while time.time() < t_end:
                 try:
-                    res = _serial_send_line("version", expect_reply=True, timeout=0.5)
+                    res = serial_svc.serial_send_line("version", expect_reply=True, timeout=0.5)
                     if res.get("ok") and res.get("reply"):
                         re_ver = (res.get("reply") or "").strip() or None
                         logstep("controller version read", ok=True, version=re_ver)
@@ -2109,7 +1335,7 @@ def api_rp_flash():
             # Try a quick PING
             ping_ok = None
             try:
-                pres = _serial_send_line("PING", expect_reply=True, timeout=0.6)
+                pres = serial_svc.serial_send_line("PING", expect_reply=True, timeout=0.6)
                 ping_ok = (pres.get("reply") == "PONG")
                 logstep("ping test", ok=bool(ping_ok), reply=pres.get("reply"))
             except Exception as e:
