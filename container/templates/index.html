@@ -322,7 +322,7 @@
     <h2 style="margin-top:10px;">Auto-apply settings</h2>
     <div class="inputs">
       <label>Min interval (s): <input type="number" id="auto_min" min="1" max="60" step="1"></label>
-      <label>Hysteresis (duty 0–255): <input type="number" id="auto_hyst" min="0" max="64" step="1"></label>
+      <label>Hysteresis (%): <input type="number" id="auto_hyst" min="0" max="100" step="1"></label>
     </div>
     <div class="divider"></div>
 
@@ -933,7 +933,11 @@ function applyValidation(){
         const am = document.getElementById('auto_min');
         const ah = document.getElementById('auto_hyst');
         if (am && typeof j.auto_apply_min_interval_s === 'number') am.value = j.auto_apply_min_interval_s;
-        if (ah && typeof j.auto_apply_hysteresis_duty === 'number') ah.value = j.auto_apply_hysteresis_duty;
+        // Convert duty (0..255) to percent (0..100) for UI
+        if (ah && typeof j.auto_apply_hysteresis_duty === 'number') {
+          const pct = Math.round((j.auto_apply_hysteresis_duty * 100) / 255);
+          ah.value = pct;
+        }
 
         const rows = document.getElementById('rows');
         rows.innerHTML = '';
@@ -1239,7 +1243,8 @@ function applyValidation(){
             single_override_hdd_c: isNaN(h) ? undefined : h,
             single_override_ssd_c: isNaN(s) ? undefined : s,
             auto_apply_min_interval_s: (autoMinEl && !isNaN(parseInt(autoMinEl.value,10))) ? parseInt(autoMinEl.value,10) : undefined,
-            auto_apply_hysteresis_duty: (autoHystEl && !isNaN(parseInt(autoHystEl.value,10))) ? parseInt(autoHystEl.value,10) : undefined
+            // Convert percent (0..100) to duty (0..255) for backend
+            auto_apply_hysteresis_duty: (autoHystEl && !isNaN(parseInt(autoHystEl.value,10))) ? Math.round((parseInt(autoHystEl.value,10) * 255) / 100) : undefined
           })
         });
         setDirty('ovr', false);
