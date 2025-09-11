@@ -1,0 +1,13 @@
+/* Login page styles extracted from login.html */
+:root { --bg:#0f172a; --card:#111827; --fg:#e5e7eb; --muted:#94a3b8; --accent:#22c55e; --border:#334155; }
+body { margin:0; background:var(--bg); color:var(--fg); font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+.wrap { min-height:100dvh; display:flex; flex-direction:column; justify-content:center; align-items:center; gap:12px; padding:24px; }
+.card { background:var(--card); border:1px solid var(--border); border-radius:10px; width:100%; max-width:420px; padding:24px; box-shadow: 0 8px 24px rgba(0,0,0,.35); }
+.logo { display:block; margin:0; width: clamp(140px, 28vw, 240px); height:auto; opacity:.95; }
+h1 { margin:0 0 8px; font-size:22px; }
+p.muted { color:var(--muted); margin:0 0 18px; font-size:14px; }
+label { display:block; font-size:13px; margin:12px 0 6px; color:var(--muted); }
+input[type=text], input[type=password] { width:100%; padding:10px 12px; border-radius:8px; border:1px solid var(--border); background:#0b1220; color:var(--fg); }
+button { margin-top:16px; width:100%; padding:10px 14px; border:1px solid var(--border); background:var(--accent); color:#052e16; font-weight:600; border-radius:8px; cursor:pointer; }
+.error { background:#7f1d1d; border:1px solid #ef4444; color:#fee2e2; padding:8px 10px; border-radius:8px; margin-top:8px; font-size:13px; }
+.hint { font-size:12px; color:var(--muted); margin-top:10px; }

@@ -13,6 +13,9 @@
   <link rel="shortcut icon" href="{{ url_for('static', filename='fanbridge.png') }}?v=1">
   <meta name="theme-color" content="#0f172a">
   <!-- FanBridge UI: status, configuration, and modals; minimal client-side JS for polling -->
+  <!-- External app assets (progressive migration out of inline blocks) -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}?v={{ version or 1 }}">
+  <script src="{{ url_for('static', filename='app.js') }}?v={{ version or 1 }}" defer></script>
   <style>
     /* Tabs (distinct from info pills) */
     .tabs {
