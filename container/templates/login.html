@@ -1,6 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}fanbridge – {{ 'Setup' if first_run else 'Login' }}{% endblock %}
 {% block content %}
+  <div class="login-page">
   <div class="wrap">
     <img class="logo" src="{{ url_for('static', filename='fanbridge.png') }}" alt="FanBridge" />
     <form class="card" method="post">
@@ -24,5 +25,6 @@
       <button type="submit">{{ 'Create account' if first_run else 'Sign in' }}</button>
       <div class="hint">{{ 'You can change the password later.' if first_run else '' }}</div>
     </form>
+  </div>
   </div>
 {% endblock %}
