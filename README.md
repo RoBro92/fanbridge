@@ -36,6 +36,7 @@ Production tips:
 - Reverse proxy/TLS recommended; set `FANBRIDGE_SECURE_COOKIES=1` when HTTPS terminates in front.
 - Tune Gunicorn via env: `GUNICORN_WORKERS` (default 2) and `GUNICORN_TIMEOUT` (default 30).
 - Metrics: scrape `/metrics` (text format) for basic counters.
+- Session secret: generated on first run and persisted at `/config/secret.key` (Docker) or `container/secret.key` (local). This file is ignored by Git; do not commit it.
 
 
 ## Roadmap
