@@ -1068,31 +1068,45 @@ def serial_status():
 # --- new quick tools endpoint; add below /api/serial/status ---
 @app.get("/api/serial/tools")
 def api_serial_tools():
-    # Always return fast: include status + an optional quick PING probe.
+    """Quick serial probe for the Serial tab.
+
+    Returns status plus a fast PING check. Even if get_serial_status() reports
+    not connected (e.g., transient probe failure), we still attempt a quick
+    PING so the UI reflects the true, current state when manual commands work.
+    """
     status = serial_svc.get_serial_status(full=True)
     checks = {"ping": {"ok": False, "ms": None, "reply": None, "error": None}}
-    if status.get("connected"):
-        t0 = time.time()
-        # Short timeout so UI never hangs long
-        res = serial_svc.serial_send_line("PING", expect_reply=True, timeout=0.5)
-        dt = int((time.time() - t0) * 1000)
-        if res.get("ok"):
-            checks["ping"] = {
-                "ok": (res.get("reply") == "PONG"),
-                "ms": dt,
-                "reply": res.get("reply"),
-                "error": None
-            }
-        else:
-            checks["ping"] = {"ok": False, "ms": dt, "reply": res.get("reply"), "error": res.get("error")}
+
+    # Always attempt a fast ping with short timeout; this mirrors the manual
+    # buttons which can succeed even when a previous open probe failed.
+    t0 = time.time()
+    res = serial_svc.serial_send_line("PING", expect_reply=True, timeout=0.5)
+    dt = int((time.time() - t0) * 1000)
+    if res.get("ok"):
+        checks["ping"] = {
+            "ok": (res.get("reply") == "PONG"),
+            "ms": dt,
+            "reply": res.get("reply"),
+            "error": None,
+        }
     else:
-        checks["ping"] = {"ok": False, "ms": None, "reply": None, "error": "not connected"}
+        # Preserve earlier status message if present; surface error otherwise
+        checks["ping"] = {
+            "ok": False,
+            "ms": dt,
+            "reply": res.get("reply"),
+            "error": res.get("error") or (status.get("message") if isinstance(status, dict) else None),
+        }
+
+    # Consider connected if either status says connected OR ping succeeded
+    connected_now = bool(status.get("connected")) or bool(checks["ping"]["ok"])
+
     # Flatten a few fields for convenience of older UI code
     payload = {
-        "ok": bool(status.get("connected")),
-        "connected": bool(status.get("connected")),
+        "ok": connected_now,
+        "connected": connected_now,
         "preferred": status.get("preferred"),
-        "port": status.get("preferred"),
+        "port": res.get("port") or status.get("preferred"),
         "baud": status.get("baud"),
         "message": status.get("message"),
         "status": status,
