@@ -53,6 +53,26 @@ Below are a few key views from the web UI.
 
 </div>
 
+## Controller Wiring
+
+If you are building the physical controller, see the companion firmware/bridge repo: [fanbridge-link](https://github.com/robro92/fanbridge-link).
+
+Notes about the hub wiring:
+- The hub used in our build presents the tach signal on the second wire/pin. Disconnect this tach line from the hub connector and instead tie that second wire to a ground point on the controller board.
+- From the fan hub to the controller we only connect two signals: PWM and GND. Do not feed the tach line into the controller.
+
+Schematic and a real‑world mockup are shown below.
+
+<p>
+  <strong>Schematic</strong><br/>
+  <img src="Images/circuit.png" alt="PWM to RP2040 and fan hub (schematic)" width="800" />
+</p>
+
+<p>
+  <strong>Perfboard mockup</strong><br/>
+  <img src="Images/circuit1.JPG" alt="Perfboard mockup of PWM wiring" width="800" />
+</p>
+
 ## Usage
 
 Run fanbridge easily via Docker or as an Unraid app:
