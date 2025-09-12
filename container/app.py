@@ -91,7 +91,13 @@ if load_dotenv:
             pass
 
 # ---------- logging setup ----------
-from core.logging_setup import setup_logging as _setup_logging, RingBufferHandler, LOG_RING as _LOG_RING, LOG_LOCK as _LOG_LOCK
+from core.logging_setup import (
+    setup_logging as _setup_logging,
+    ensure_handlers as _ensure_log_handlers,
+    RingBufferHandler,
+    LOG_RING as _LOG_RING,
+    LOG_LOCK as _LOG_LOCK,
+)
 
 _setup_logging()
 log = logging.getLogger("fanbridge")
@@ -215,6 +221,12 @@ def _should_log_startup() -> bool:
     return (rm is None) or (rm == "true")
 
 if _should_log_startup():
+    # Re‑attach ring buffer handler in case a WSGI server reconfigured logging
+    # after import (e.g., Gunicorn). This keeps the UI Logs view working.
+    try:
+        _ensure_log_handlers()
+    except Exception:
+        pass
     log.info("FanBridge starting | version=%s in_docker=%s", APP_VERSION or "unknown", str(_in_docker()).lower())
 
 
@@ -279,6 +291,11 @@ def create_app():
         pass
     try:
         app.register_blueprint(logs_bp, url_prefix="/api")
+    except Exception:
+        pass
+    try:
+        # Final safeguard: ensure our ring handler is present once the app is built
+        _ensure_log_handlers()
     except Exception:
         pass
     return app
