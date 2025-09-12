@@ -1,6 +1,13 @@
-Version: 1.1.1
+Version: 1.1.2
 
 # Changelog
+
+## 1.1.2 — 2025-09-13
+
+Fixes
+- Serial tab “Serial tools” pill could show “not opened” while PING/Test worked.
+  - Tools endpoint now always performs a fast PING and treats a successful reply as connected, surfacing the active port and round‑trip time.
+  - Ensures the UI reflects real connectivity even if a prior open‑probe failed.
 
 ## 1.1.1 — 2025-09-13
 
