@@ -18,6 +18,13 @@ _LEVELS = {
 
 @bp.get("/logs")
 def api_logs():
+    """Return recent log items from the in-process ring buffer.
+
+    Query params:
+      - since: last seen item id (int). Items with id <= since are omitted.
+      - min_level: DEBUG/INFO/WARNING/ERROR (inclusive filter).
+      - limit: max number of items to return (1..1000).
+    """
     try:
         since = int(request.args.get("since", "0") or "0")
     except Exception:
@@ -32,7 +39,16 @@ def api_logs():
         src = list(_LOG_RING) if isinstance(_LOG_RING, list) else list(_LOG_RING)
     except Exception:
         src = []
-    # filter
+
+    # Determine last id in the ring for clients to advance cursors
+    last_id = 0
+    try:
+        if src:
+            last_id = int((src[-1] or {}).get("id", 0))
+    except Exception:
+        last_id = 0
+
+    # Filter by id and minimum level
     items = []
     try:
         for it in reversed(src):
@@ -47,7 +63,20 @@ def api_logs():
     except Exception:
         items = []
 
-    return jsonify({"ok": True, "items": list(reversed(items)), "count": len(items)})
+    # Current effective root level (number)
+    import logging as _logging
+    try:
+        current_level = int(_logging.getLogger().getEffectiveLevel())
+    except Exception:
+        current_level = 20
+
+    return jsonify({
+        "ok": True,
+        "items": list(reversed(items)),
+        "count": len(items),
+        "last_id": last_id,
+        "level": current_level,
+    })
 
 
 @bp.post("/log_level")
