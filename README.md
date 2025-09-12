@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="Images/title.png" alt="FanBridge" width="800" />
+</p>
+
 # FanBridge v1.1.0
 
 FanBridge is a Dockerised Unraid service designed to monitor hard drive temperatures and intelligently control external PWM fans via Arduino or RP2040 microcontrollers. It provides a seamless way to keep your drives cool by adjusting fan speeds based on drive temperature data, helping to extend drive lifespan and reduce noise.
@@ -12,6 +16,42 @@ Production‑ready fan control bridge for Unraid.
 - Auth (login, change password), CSRF, sensible security headers.
 - Logs API (ring buffer) and basic Prometheus metrics.
 - Clean UI with dark/light mode and responsive layout.
+
+## Screenshots
+
+Below are a few key views from the web UI.
+
+<div>
+
+<p>
+  <strong>Login</strong><br/>
+  <img src="Images/login.png" alt="Login page" width="800" />
+  <br/>
+  <em>Initial authentication screen with username/password.</em>
+  </p>
+
+<p>
+  <strong>Drives</strong><br/>
+  <img src="Images/drives.png" alt="Drives configuration" width="800" />
+  <br/>
+  <em>Drive overview and configuration used to compute fan PWM.</em>
+  </p>
+
+<p>
+  <strong>Serial</strong><br/>
+  <img src="Images/serial.png" alt="Serial page" width="800" />
+  <br/>
+  <em>USB serial controller status, quick tools, and send interface.</em>
+  </p>
+
+<p>
+  <strong>Logs</strong><br/>
+  <img src="Images/logs.png" alt="Logs page" width="800" />
+  <br/>
+  <em>Built‑in logs viewer and ring buffer controls.</em>
+  </p>
+
+</div>
 
 ## Usage
 
