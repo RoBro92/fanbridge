@@ -76,7 +76,8 @@ def api_logs_clear():
 
 @bp.get("/logs/download")
 def api_logs_download():
-    fmt = request.args.get("fmt") or "text"
+    # Accept both fmt and format for compatibility with older UI code
+    fmt = request.args.get("format") or request.args.get("fmt") or "text"
     try:
         src = list(_LOG_RING) if isinstance(_LOG_RING, list) else list(_LOG_RING)
     except Exception:
@@ -197,4 +198,3 @@ def api_logs_download():
         resp.headers["Content-Type"] = "text/plain; charset=utf-8"
     resp.headers["Content-Disposition"] = f"attachment; filename=\"{filename}\""
     return resp
-

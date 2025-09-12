@@ -300,6 +300,14 @@ def create_app():
         pass
     return app
 
+# Ensure blueprints are registered when imported under WSGI servers (gunicorn)
+# which typically load `app:app`. `create_app()` wires up API blueprints onto
+# the global `app` object; call it here so routes like /api/logs are present.
+try:
+    app = create_app()
+except Exception:
+    pass
+
 # Initialize serial service context
 try:
     serial_svc.init(
