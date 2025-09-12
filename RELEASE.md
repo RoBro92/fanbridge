@@ -1,6 +1,18 @@
-Version: 1.1.0
+Version: 1.1.1
 
 # Changelog
+
+## 1.1.1 — 2025-09-13
+
+Fixes
+- Restore Logs page functionality after modularization refactor.
+  - Ensure API blueprints are registered when running under Gunicorn (app:app), so `/api/logs*` routes are present.
+  - Make logging ring buffer resilient to server reconfiguration and re‑attach handler at startup.
+  - Logs API now returns `last_id` and current `level`, and accepts `format=` as well as `fmt` for downloads.
+  - UI uses `last_id` to advance cursor and shows runtime level correctly.
+ 
+Other
+- Footer order updated and Support link points to the Unraid forum thread.
 
 ## 1.1.0 — 2025-09-11
 
