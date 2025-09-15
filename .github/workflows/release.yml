@@ -1,0 +1,58 @@
+name: Create GitHub Release
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to create/update release for (e.g., v1.1.3)'
+        required: true
+        default: ''
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Determine ref
+        id: ref
+        run: |
+          REF_NAME="${GITHUB_REF_NAME}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag }}" ]; then
+            REF_NAME="${{ inputs.tag }}"
+          fi
+          echo "REF_NAME=${REF_NAME}" >> $GITHUB_ENV
+
+      - name: Checkout repo at tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: refs/tags/${{ env.REF_NAME }}
+
+      - name: Extract release notes from RELEASE.md
+        id: notes
+        shell: bash
+        run: |
+          VER_NO_V="${REF_NAME#v}"
+          awk -v ver="$VER_NO_V" '
+            $0 ~ "^##[[:space:]]*" ver "( |$)" {flag=1; next}
+            flag && /^##[[:space:]]*[0-9]/ {flag=0}
+            flag {print}
+          ' RELEASE.md > RELEASE_SECTION.md || true
+          if [ ! -s RELEASE_SECTION.md ]; then
+            echo "Could not find notes for version ${VER_NO_V} in RELEASE.md; using fallback body." >&2
+            echo "Release ${REF_NAME}" > RELEASE_SECTION.md
+          fi
+          echo "BODY_FILE=RELEASE_SECTION.md" >> $GITHUB_OUTPUT
+
+      - name: Create/Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.REF_NAME }}
+          name: ${{ env.REF_NAME }}
+          body_path: ${{ steps.notes.outputs.BODY_FILE }}
+          draft: false
+          prerelease: false
+
