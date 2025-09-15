@@ -1,6 +1,17 @@
-Version: 1.1.2
+Version: 1.1.3
 
 # Changelog
+
+## 1.1.3 — 2025-09-15
+
+Fixes
+- Ensure PWM auto‑apply continues when the WebUI is closed.
+  - The Docker healthcheck (`/health`) now triggers the same status compute used by the UI poll, which performs auto‑apply when enabled.
+  - Respects existing hysteresis and minimum‑interval safeguards; never fails the healthcheck on background errors.
+  - If you want a faster cadence, tune the container healthcheck interval (e.g., `--health-interval=10s`).
+
+Notes
+- Auto‑apply remains opt‑in. Enable it in Settings or set `auto_apply: true` in `/config/config.yml`.
 
 ## 1.1.2 — 2025-09-13
 

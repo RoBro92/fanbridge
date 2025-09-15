@@ -854,6 +854,13 @@ def compute_status():
 
 @app.get("/health")
 def health():
+    # Also drive auto-apply via the Docker healthcheck so PWM updates
+    # continue even when no browser is polling /api/status.
+    try:
+        compute_status()  # safe no-op if auto_apply is disabled
+    except Exception:
+        # Never fail health due to background compute/apply issues
+        pass
     return jsonify({"status": "ok", "uptime_s": int(time.time() - STARTED)})
 
 # Toggle auto-apply on/off
