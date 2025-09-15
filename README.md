@@ -2,8 +2,6 @@
   <img src="Images/title.png" alt="FanBridge" width="800" />
 </p>
 
-# FanBridge v1.1.0
-
 FanBridge is a Dockerised Unraid service designed to monitor hard drive temperatures and intelligently control external PWM fans via Arduino or RP2040 microcontrollers. It provides a seamless way to keep your drives cool by adjusting fan speeds based on drive temperature data, helping to extend drive lifespan and reduce noise.
 
 Production‑ready fan control bridge for Unraid.
