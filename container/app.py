@@ -236,7 +236,8 @@ def _default_config_path() -> str:
     return "/config/config.yml" if _in_docker() else str(_BASE / "config.local.yml")
 
 CONFIG_PATH = os.environ.get("FANBRIDGE_CONFIG") or _default_config_path()
-DISKS_INI = "/unraid/disks.ini"   # bind-mount to /var/local/emhttp/disks.ini on host
+DISKS_INI = os.environ.get("FANBRIDGE_DISKS_INI", "/unraid/disks.ini")
+
 USERS_PATH = "/config/users.yml" if _in_docker() else str((_BASE / "users.local.yml"))
 
 # Serial preference and baud configurable via environment
@@ -850,8 +851,12 @@ def compute_status():
                 pass
     except Exception:
         pass
+    try:
+        from services.history import record_status
+        record_status(hdd.get("avg", 0), ssd.get("avg", 0), payload["recommended_pwm"])
+    except Exception as e:
+        log.warning("failed to record history: %s", e)
     return payload
-
 @app.get("/health")
 def health():
     # Also drive auto-apply via the Docker healthcheck so PWM updates
@@ -890,12 +895,12 @@ def add_no_cache(resp):
         resp.headers.setdefault("X-Content-Type-Options", "nosniff")
         resp.headers.setdefault("X-Frame-Options", "DENY")
         resp.headers.setdefault("Referrer-Policy", "same-origin")
-        # CSP for the app: allow Ko‑fi iframe (frame) and https images. No external scripts.
+        # CSP for the app: allow Ko‑fi iframe (frame) and https images. No external scripts except Chart.js.
         csp = (
             "default-src 'self'; "
             "img-src 'self' data: https:; "
             "style-src 'self' 'unsafe-inline'; "
-            "script-src 'self' 'unsafe-inline'; "
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
             "frame-src 'self' https://ko-fi.com"
         )
         resp.headers.setdefault("Content-Security-Policy", csp)
@@ -1066,102 +1071,43 @@ def status():
         data["serial"] = {"available": False, "connected": False, "message": "error"}
     return jsonify(data)
 
-
-# --------- API: Serial status ---------
-@app.get("/api/serial/status")
-def serial_status():
-    return jsonify(serial_svc.get_serial_status(full=True))
-
-# --- new quick tools endpoint; add below /api/serial/status ---
-@app.get("/api/serial/tools")
-def api_serial_tools():
-    """Quick serial probe for the Serial tab.
-
-    Returns status plus a fast PING check. Even if get_serial_status() reports
-    not connected (e.g., transient probe failure), we still attempt a quick
-    PING so the UI reflects the true, current state when manual commands work.
-    """
-    status = serial_svc.get_serial_status(full=True)
-    checks = {"ping": {"ok": False, "ms": None, "reply": None, "error": None}}
-
-    # Always attempt a fast ping with short timeout; this mirrors the manual
-    # buttons which can succeed even when a previous open probe failed.
-    t0 = time.time()
-    res = serial_svc.serial_send_line("PING", expect_reply=True, timeout=0.5)
-    dt = int((time.time() - t0) * 1000)
-    if res.get("ok"):
-        checks["ping"] = {
-            "ok": (res.get("reply") == "PONG"),
-            "ms": dt,
-            "reply": res.get("reply"),
-            "error": None,
-        }
-    else:
-        # Preserve earlier status message if present; surface error otherwise
-        checks["ping"] = {
-            "ok": False,
-            "ms": dt,
-            "reply": res.get("reply"),
-            "error": res.get("error") or (status.get("message") if isinstance(status, dict) else None),
-        }
-
-    # Consider connected if either status says connected OR ping succeeded
-    connected_now = bool(status.get("connected")) or bool(checks["ping"]["ok"])
-
-    # Flatten a few fields for convenience of older UI code
-    payload = {
-        "ok": connected_now,
-        "connected": connected_now,
-        "preferred": status.get("preferred"),
-        "port": res.get("port") or status.get("preferred"),
-        "baud": status.get("baud"),
-        "message": status.get("message"),
-        "status": status,
-        "checks": checks,
-    }
-    return jsonify(payload)
+@app.get("/api/history")
+def history():
+    from services.history import get_history
+    try:
+        hours = int(request.args.get("hours", "1"))
+    except ValueError:
+        hours = 1
+    return jsonify({"ok": True, "history": get_history(hours)})
 
 
-# --------- API: Serial send a raw line ---------
-@app.post("/api/serial/send")
-def api_serial_send():
-    data = request.get_json(force=True, silent=True) or {}
-    line = (data.get("line") or "").strip()
-    if not line:
-        return jsonify({"ok": False, "error": "missing line"}), 400
+@app.get("/api/stream")
+def api_stream():
+    def event_stream():
+        while True:
+            # Re-compute status and yield it
+            data = compute_status()
+            try:
+                ss = serial_svc.get_serial_status(full=False)
+                data["serial"] = {
+                    "preferred": ss.get("preferred"),
+                    "available": ss.get("available"),
+                    "connected": ss.get("connected"),
+                    "baud": ss.get("baud"),
+                    "message": ss.get("message"),
+                }
+            except Exception as e:
+                logging.getLogger("fanbridge").exception("serial status embed failed: %s", e)
+                data["serial"] = {"available": False, "connected": False, "message": "error"}
+            
+            import json
+            yield f"data: {json.dumps(data)}\n\n"
+            time.sleep(3)  # Push updates every 3 seconds
 
-    res = serial_svc.serial_send_line(line, expect_reply=True)
-    # log succinctly
-    if res.get("ok"):
-        log.info("serial send | port=%s echo=%r reply=%r", res.get("port"), line, res.get("reply"))
-        try: _m_inc_serial_cmd("send", "ok")
-        except Exception: pass
-    else:
-        log.warning("serial send failed | echo=%r err=%s", line, res.get("error") or "unknown")
-        try: _m_inc_serial_cmd("send", "error")
-        except Exception: pass
-    code = 200 if res.get("ok") else 503
-    return jsonify(res), code
+    from flask import Response
+    return Response(event_stream(), mimetype="text/event-stream")
 
-
-# --------- API: Serial set PWM (0..255 raw duty) ---------
-@app.post("/api/serial/pwm")
-def api_serial_pwm():
-    data = request.get_json(force=True, silent=True) or {}
-    if "value" not in data:
-        return jsonify({"ok": False, "error": "missing value"}), 400
-    # Accept 0..100% from client
-    res = serial_svc.serial_set_pwm_percent(data.get("value"))
-    if res.get("ok"):
-        log.info("serial pwm | port=%s value=%s reply=%r", res.get("port"), res.get("value"), res.get("reply"))
-        try: _m_inc_serial_cmd("pwm", "ok")
-        except Exception: pass
-    else:
-        log.warning("serial pwm failed | value=%s err=%s", data.get("value"), res.get("error") or "unknown")
-        try: _m_inc_serial_cmd("pwm", "error")
-        except Exception: pass
-    code = 200 if res.get("ok") else 503
-    return jsonify(res), code
+# --------- API: Serial endpoints moved to api/serial blueprint ---------
 
 
 

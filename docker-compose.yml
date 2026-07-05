@@ -19,7 +19,7 @@ services:
       # Optional: map Unraid disks (preferred: map the directory)
       # - /var/local/emhttp:/unraid:ro
       #   (or bind the single file)
-      # - /var/local/emhttp/disks.ini:/unraid/disks.ini:ro
+      - ./dev-unraid/disks.ini:/unraid/disks.ini:ro
     # Optional device mapping; leave blank if unplugged
     # devices:
     #   - "/dev/ttyACM0:/dev/ttyACM0"

@@ -219,6 +219,46 @@
     /* Prevent header pills from overflowing too far; allow wrap neatly */
     .meta { color: #666; margin-bottom: 16px; max-width: 905px; }
   </style>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    /* Premium dark mode glassmorphism */
+    :root {
+      --bg: #0f172a;
+      --fg: #e2e8f0;
+      --cardbg: rgba(30, 41, 59, 0.7);
+      --pillbg: rgba(51, 65, 85, 0.5);
+      --border: rgba(255, 255, 255, 0.1);
+      --accent: #38bdf8;
+    }
+    body {
+      background: linear-gradient(135deg, #0f172a, #1e1b4b);
+      color: var(--fg);
+      font-family: 'Inter', system-ui, sans-serif;
+    }
+    .panel, .serial-box, .card, .modal-content {
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+    }
+    .pill, button {
+      transition: all 0.2s ease-in-out;
+    }
+    .pill:hover, button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+    .chart-container {
+      width: 100%;
+      max-width: 905px;
+      margin: 20px 0;
+      padding: 15px;
+      background: var(--cardbg);
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+  </style>
 </head>
 <body data-poll="{{ poll_s|int }}" data-version="{{ version or '—' }}">
   <div class="page-header">
@@ -251,7 +291,12 @@
   <div id="statusBanner" class="banner warn"></div>
 
   <div id="panel-main">
+  
+  <div class="chart-container">
+    <canvas id="historyChart" height="100"></canvas>
+  </div>
   <table id="tbl">
+
     <thead>
       <tr>
         <th>Device</th>
@@ -607,7 +652,80 @@
     })());
     let pollTimer = null;
     let pollTimerSerial = null;
+    
     function startPolling(){
+      if (pollTimer) clearInterval(pollTimer);
+      if (pollTimerSerial) clearInterval(pollTimerSerial);
+      const ms = Math.max(3, Math.min(60, pollSeconds))*1000;
+      // Replaced normal polling with SSE
+      if (window.evtSource) window.evtSource.close();
+      window.evtSource = new EventSource('/api/stream');
+      window.evtSource.onmessage = function(e) {
+         // SSE updates
+         refresh(JSON.parse(e.data));
+         refreshSerial();
+      };
+      
+      // Still fetch history periodically
+      setInterval(fetchHistory, 30000);
+      fetchHistory();
+      
+      const pb = document.getElementById('pollbtn');
+      if (pb) pb.textContent = `live updates: SSE`;
+      if (pb) pb.title = 'SSE stream active';
+    }
+    
+    let historyChart = null;
+    async function fetchHistory() {
+      try {
+        const res = await fetch('/api/history?hours=1');
+        const j = await res.json();
+        if(j.ok && j.history) {
+           renderChart(j.history);
+        }
+      } catch(e) {
+        console.error("history err", e);
+      }
+    }
+    
+    function renderChart(historyData) {
+      const ctx = document.getElementById('historyChart').getContext('2d');
+      const labels = historyData.map(d => new Date(d.ts * 1000).toLocaleTimeString());
+      const hddData = historyData.map(d => d.hdd_avg);
+      const ssdData = historyData.map(d => d.ssd_avg);
+      const pwmData = historyData.map(d => d.pwm);
+      
+      if(historyChart) {
+         historyChart.data.labels = labels;
+         historyChart.data.datasets[0].data = hddData;
+         historyChart.data.datasets[1].data = ssdData;
+         historyChart.data.datasets[2].data = pwmData;
+         historyChart.update();
+         return;
+      }
+      
+      historyChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [
+            { label: 'HDD Avg (°C)', data: hddData, borderColor: '#38bdf8', backgroundColor: 'rgba(56, 189, 248, 0.1)', fill: true, tension: 0.4 },
+            { label: 'SSD Avg (°C)', data: ssdData, borderColor: '#a78bfa', backgroundColor: 'rgba(167, 139, 250, 0.1)', fill: true, tension: 0.4 },
+            { label: 'PWM %', data: pwmData, borderColor: '#f472b6', borderDash: [5, 5], tension: 0.4, yAxisID: 'y1' }
+          ]
+        },
+        options: {
+          responsive: true,
+          interaction: { mode: 'index', intersect: false },
+          scales: {
+            y: { beginAtZero: false, title: { display: true, text: 'Temp °C' } },
+            y1: { beginAtZero: true, max: 100, position: 'right', title: { display: true, text: 'PWM %' } }
+          }
+        }
+      });
+    }
+
+    function _startPolling_old(){
       if (pollTimer) clearInterval(pollTimer);
       if (pollTimerSerial) clearInterval(pollTimerSerial);
       const ms = Math.max(3, Math.min(60, pollSeconds))*1000;
@@ -641,7 +759,7 @@
     async function logsTick(){
       try{
         const r = await fetch(`/api/logs?since=${logsSince}&min_level=DEBUG&limit=400`, { cache:'no-store' });
-        const j = await r.json();
+        const j = sseData || await (await fetch('/api/status')).json();
         if (j && j.items && j.items.length){
           logsAppend(j.items);
           logsSince = j.last_id || logsSince;
@@ -661,7 +779,7 @@
       if (!el) return;
       try {
         const r = await fetch('/api/serial/status', { cache: 'no-store' });
-        const j = await r.json();
+        const j = sseData || await (await fetch('/api/status')).json();
         if (j.connected) {
           el.textContent = 'serial: connected';
           el.title = (j.preferred ? `Using ${j.preferred}` : (j.ports && j.ports[0] ? `Using ${j.ports[0]}` : 'connected'));
@@ -705,7 +823,7 @@
       }catch(e){}
       try {
         const r = await fetch('/api/rp/status', { cache: 'no-store' });
-        const j = await r.json();
+        const j = sseData || await (await fetch('/api/status')).json();
         if (priv){
           priv.textContent = 'privileged: ' + (j.privileged ? 'yes' : 'no');
           priv.className = 'pill small ' + (j.privileged ? 'ok' : 'warn');
@@ -849,11 +967,11 @@ function applyValidation(){
       }
     }
 
-    async function refresh() {
+    async function refresh(sseData) {
       try {
         // extend timeout to tolerate slower disks.ini reads / network hiccups
-        const r = await fetchWithTimeout('/api/status', { cache: 'no-store' }, Math.max(10000, Math.min(25000, (pollSeconds || 7) * 2000)));
-        const j = await r.json();
+        // const r = await fetchWithTimeout('/api/status', { cache: 'no-store' }, Math.max(10000, Math.min(25000, (pollSeconds || 7) * 2000)));
+        const j = sseData || await (await fetch('/api/status')).json();
 
         const VERSION_FALLBACK = document.body.dataset.version || '—';
         const verEl = document.getElementById('ver');
