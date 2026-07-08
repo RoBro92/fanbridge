@@ -1,32 +1,33 @@
 # FanBridge Unraid Templates
 
-Docker templates for the FanBridge container on Unraid.
+These are the official Docker templates for deploying the FanBridge container on Unraid. FanBridge intelligently bridges Unraid drive temperatures to the external FanBridge Link microcontroller (RP2040) over USB serial to control your system's PWM fans.
 
-FanBridge bridges Unraid drive temperatures to an external microcontroller (Arduino/RP2040) over USB serial to control PWM fans.
+## Installation Methods
 
-## Install
-
-- In Unraid, install via Community Applications by searching for "FanBridge"; or
-- Use the XML template at `templates/my-fanbridge.xml` directly when adding a container.
+| Method | Instructions |
+|---|---|
+| **Community Applications** | In Unraid, navigate to the `Apps` tab and search for **"FanBridge"**. Click install. |
+| **Manual XML** | Copy `templates/my-fanbridge.xml` into your Unraid templates directory and use the `Add Container` interface. |
 
 ## Default Configuration
 
-- Web UI port: `8080`
-- AppData (config): `/mnt/maincache/appdata/fanbridge` → container `/config`
-- Unraid emhttp directory (ro): `/var/local/emhttp` → container `/unraid`
-- Serial device: host `/dev/ttyACM0` mapped to container `/dev/ttyACM0`
-- Optional (advanced): `/var/local/emhttp/disks.ini` → container `/unraid/disks.ini` (ro)
+The container is configured out-of-the-box with minimal, functional defaults. You can adjust these to fit your Unraid environment.
 
-These are minimal, working defaults. You can adjust paths to your environment as needed.
+| Setting | Default Host Value | Container Mapping | Description |
+|---|---|---|---|
+| **Web UI Port** | `8080` | `8080` | Port for the FanBridge web interface. |
+| **AppData** | `/mnt/maincache/appdata/fanbridge` | `/config` | Persistent storage for application configuration. |
+| **emhttp Directory** | `/var/local/emhttp` | `/unraid` (Read-Only) | Directory used to read `disks.ini` for drive temperatures. |
+| **Serial Device** | `/dev/ttyACM0` | `/dev/ttyACM0` | USB serial connection to the FanBridge Link controller. |
 
-## Links
+*Advanced Note: You can optionally bind just `/var/local/emhttp/disks.ini` directly to `/unraid/disks.ini` (Read-Only) instead of the entire emhttp folder.*
 
-- Web UI: `http://[IP]:8080/`
-- Support: https://forums.unraid.net/topic/193488-fanbridge-docker-support/
-- Docker image: `ghcr.io/robro92/fanbridge:latest`
-- Donate: https://ko-fi.com/robro92
+## Important Links
+
+- **Support Thread:** [Unraid Forums](https://forums.unraid.net/topic/193488-fanbridge-docker-support/)
+- **Docker Image:** [`ghcr.io/robro92/fanbridge:latest`](https://github.com/RoBro92/fanbridge/pkgs/container/fanbridge)
+- **Donate:** [Support Development on Ko-fi](https://ko-fi.com/robro92)
 
 ## License
 
-Template files are provided under the repository's license. See upstream project for application licensing.
-
+These template files are provided under the main repository's license. See the upstream project for application licensing details.
