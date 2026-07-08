@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Application>
+  <Name>FanBridge</Name>
+  <Overview><![CDATA[
+  FanBridge – bridge Unraid drive temperatures to an external microcontroller (RP2040) over USB serial to control PWM fans.
+  
+  Defaults match a known‑working Unraid setup: port 8080, appdata at /mnt/maincache/appdata/fanbridge, the Unraid emhttp directory mounted read‑only at /unraid, and a serial TTY at /dev/ttyACM0. Only these basics are included for now to avoid confusion.]]></Overview>
+  <Category>System:Utilities</Category>
+  <Registry>https://github.com/RoBro92/fanbridge/pkgs/container/fanbridge</Registry>
+  <Repository>ghcr.io/robro92/fanbridge:latest</Repository>
+  <WebUI>http://[IP]:[PORT:8080]/</WebUI>
+  <Network>bridge</Network>
+  <Privileged>false</Privileged>
+  <Icon>https://raw.githubusercontent.com/RoBro92/fanbridge-unraid-templates/master/icons/fanbridge.png</Icon>
+  <Support>https://forums.unraid.net/topic/193488-fanbridge-docker-support/</Support>
+  <DonateLink>https://ko-fi.com/robro92</DonateLink>
+  <ExtraParams>
+    --label net.unraid.docker.managed=dockerman
+    --label net.unraid.docker.webui='http://[IP]:[PORT:8080]/'
+    --label net.unraid.docker.icon='https://raw.githubusercontent.com/RoBro92/fanbridge-unraid-templates/master/icons/fanbridge.png'
+  </ExtraParams>
+
+  <!-- Ports -->
+  <Config Name="Web UI Port" Target="8080" Default="8080" Mode="tcp" Type="Port" Description="Web interface port" Display="always" Required="true" Mask="false">8080</Config>
+
+  <!-- Paths (Host → Container) -->
+  <Config Name="AppData (config)" Target="/config" Default="/mnt/maincache/appdata/fanbridge" Type="Path" Mode="rw" Description="Container configuration directory. Persist settings and user data here." Display="always" Required="true" Mask="false"/>
+
+  <Config Name="Unraid emhttp directory (read-only)" Target="/unraid" Default="/var/local/emhttp" Type="Path" Mode="ro" Description="Bind the full emhttp directory (preferred)." Display="always" Required="false" Mask="false"/>
+
+  <!-- Serial TTY: default /dev/ttyACM0 -->
+  <Config Name="Serial TTY" Target="/dev/ttyACM0" Default="/dev/ttyACM0" Type="Path" Mode="rw" Description="Bind the serial device inside the container at the same path." Display="always" Required="false" Mask="false"/>
+  <Config Name="/dev/ttyACM0" Target="/dev/ttyACM0" Default="/dev/ttyACM0" Type="Device" Description="Expose the serial device directly." Display="always" Required="false" Mask="false"/>
+
+  <!-- Optional: single-file bind (advanced) -->
+  <Config Name="Unraid disks.ini (ro)" Target="/unraid/disks.ini" Default="/var/local/emhttp/disks.ini" Type="Path" Mode="ro" Description="Bind only disks.ini (optional)." Display="advanced" Required="false" Mask="false"/>
+
+  <Version>1.2.0</Version>
+</Application>
