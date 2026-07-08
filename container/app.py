@@ -479,9 +479,7 @@ from services.disks import read_unraid_disks
     # Serial helpers moved to services.serial
 
 # ---------- Auto-apply PWM state ----------
-_AUTO_LAST_DUTY: int | None = None
-_AUTO_LAST_TS: float | None = None
-_AUTO_PAUSED_MSG: str | None = None
+# Moved to services.pwm_calculator
 
 #
 # ---------- Serial send helpers used by API ----------
@@ -670,193 +668,19 @@ def _umount(mount_point: str) -> None:
 
 
 # ---------- PWM logic ----------
-def map_temp_to_pwm(temp: int, thresholds: list[int], pwms: list[int]) -> int:
-    step = 0
-    for i, th in enumerate(thresholds):
-        if temp >= th:
-            step = i
-        else:
-            break
-    return int(pwms[step])
+from services.pwm_calculator import compute_status as _compute_status_svc
 
 def compute_status():
-    global cfg
-    cfg = load_config()
-
-    # Production: prefer Unraid's disks.ini; do not fabricate drives in Docker.
-    # Local dev (not in Docker) may still use the sim data in config for testing.
-    if os.path.exists(DISKS_INI):
-        mode = "unraid"
-        try:
-            excludes = set(cfg.get("exclude_devices") or [])
-        except Exception:
-            excludes = set()
-        drives = read_unraid_disks(DISKS_INI, excludes)
-    else:
-        if _in_docker():
-            # In Docker with no disks.ini mapped: run with empty drives (fallback PWM logic applies)
-            mode = "unraid-missing"
-            drives = []
-        else:
-            # Local dev-only: allow sim
-            mode = "sim"
-            drives = []
-            for d in (cfg.get("sim", {}).get("drives", []) or []):
-                _dtype = d.get("type", "HDD")
-                _temp = d.get("temp")
-                if _dtype == "HDD":
-                    _state = "down" if _temp is None else "up"
-                else:
-                    _state = "spun down" if _temp is None else "on"
-                drives.append({
-                    "dev": d.get("name"),
-                    "type": _dtype,
-                    "temp": _temp,
-                    "state": _state,
-                    "excluded": False,
-                })
-
-    # log any N/A for visibility
-    for d in drives:
-        if d["state"] == "N/A":
-            log.warning("disks.ini has no temp | dev=%s type=%s", d['dev'], d['type'])
-
-    # Pool stats (respect user excludes)
-    hdd_vals = [d["temp"] for d in drives if d.get("type") == "HDD" and not d.get("excluded") and d.get("temp") is not None]
-    ssd_vals = [d["temp"] for d in drives if d.get("type") == "SSD" and not d.get("excluded") and d.get("temp") is not None]
-
-    def stats(vals):
-        if not vals:
-            return {"avg": 0, "min": 0, "max": 0, "count": 0}
-        return {"avg": int(sum(vals)/len(vals)), "min": min(vals), "max": max(vals), "count": len(vals)}
-
-    hdd = stats(hdd_vals)
-    ssd = stats(ssd_vals)
-
-    # Overrides + curves
-    override = False
-    if hdd_vals and max(hdd_vals) >= int(cfg.get("single_override_hdd_c", 45)): override = True
-    if ssd_vals and max(ssd_vals) >= int(cfg.get("single_override_ssd_c", 60)): override = True
-
-    if override:
-        recommended_pwm = int(cfg.get("override_pwm", 100))
-    else:
-        pwm_hdd = map_temp_to_pwm(hdd["avg"], cfg["hdd_thresholds"], cfg["hdd_pwm"]) if hdd["count"] else 0
-        pwm_ssd = map_temp_to_pwm(ssd["avg"], cfg["ssd_thresholds"], cfg["ssd_pwm"]) if ssd["count"] else 0
-        recommended_pwm = max(pwm_hdd, pwm_ssd)
-        if hdd["count"] == 0 and ssd["count"] == 0:
-            recommended_pwm = int(cfg.get("fallback_pwm", 10))
-
-    disks_mtime = None
-    try:
-        if os.path.exists(DISKS_INI):
-            disks_mtime = int(os.path.getmtime(DISKS_INI))
-        else:
-            _warn_once(
-                "disks_ini_missing",
-                f"Could not read {DISKS_INI}; Unraid mapping missing. Map /var/local/emhttp -> /unraid:ro or bind /var/local/emhttp/disks.ini -> /unraid/disks.ini:ro",
-            )
-    except Exception as e:
-        try:
-            logging.getLogger("fanbridge").warning("Failed to stat %s: %s", DISKS_INI, e)
-        except Exception:
-            pass
-
-    # Auto-apply PWM to controller if enabled and safe
-    auto_enabled = bool(cfg.get("auto_apply"))
-    auto_last_duty = _AUTO_LAST_DUTY
-    auto_last_ts = _AUTO_LAST_TS
-    auto_paused_msg = None
-    if auto_enabled:
-        try:
-            # Only attempt if serial looks connected
-            sstat = serial_svc.get_serial_status(full=False)
-            if not sstat.get("connected"):
-                auto_paused_msg = "controller not connected"
-            else:
-                # Recommended PWM as percent 0–100
-                pct = int(recommended_pwm)
-                if pct < 0: pct = 0
-                if pct > 100: pct = 100
-                # Derive a duty 0..255 only for hysteresis comparison; we send percent to the controller.
-                duty = int(round(pct * 255 / 100))
-                # Apply hysteresis and min interval
-                min_ivl = int(cfg.get("auto_apply_min_interval_s", 3) or 3)
-                hyst = int(cfg.get("auto_apply_hysteresis_duty", 5) or 5)
-                now_ts = time.time()
-                delta_ok = (_AUTO_LAST_DUTY is None) or (abs(duty - int(_AUTO_LAST_DUTY)) >= max(0, hyst))
-                ivl_ok = (_AUTO_LAST_TS is None) or ((now_ts - float(_AUTO_LAST_TS)) >= max(1, min_ivl))
-                if delta_ok and ivl_ok:
-                    res = serial_svc.serial_set_pwm_percent(pct)
-                    if res.get("ok"):
-                        auto_last_duty = duty
-                        auto_last_ts = now_ts
-                        globals()["_AUTO_LAST_DUTY"] = duty
-                        globals()["_AUTO_LAST_TS"] = now_ts
-                    else:
-                        auto_paused_msg = str(res.get("error") or "send failed")
-        except Exception as e:
-            try:
-                logging.getLogger("fanbridge").warning("auto-apply error: %s", e)
-            except Exception:
-                pass
-            auto_paused_msg = "auto-apply error"
-
-    payload = {
-        "drives": drives,
-        "hdd": hdd,
-        "ssd": ssd,
-        "override_hdd_c": int(cfg.get("single_override_hdd_c", 45)),
-        "override_ssd_c": int(cfg.get("single_override_ssd_c", 60)),
-        "exclude_devices": sorted(list(set(cfg.get("exclude_devices") or []))),
-        "hdd_thresholds": cfg.get("hdd_thresholds", []),
-        "hdd_pwm": cfg.get("hdd_pwm", []),
-        "ssd_thresholds": cfg.get("ssd_thresholds", []),
-        "ssd_pwm": cfg.get("ssd_pwm", []),
-        "recommended_pwm": int(recommended_pwm),
-        "override": override,
-        "mode": mode,
-        "version": APP_VERSION,
-        "disks_ini_mtime": disks_mtime,
-        "disks_stale_warn_s": int(DISKS_STALE_WARN_SEC),
-        # Auto-apply reporting
-        "auto_apply": auto_enabled,
-        "auto_last_duty": int(auto_last_duty) if auto_last_duty is not None else None,
-        "auto_last_ts": int(auto_last_ts) if auto_last_ts is not None else None,
-        "auto_paused": bool(auto_paused_msg),
-        "auto_message": auto_paused_msg,
-        # Auto-apply config values for client UI
-        "auto_apply_min_interval_s": int(cfg.get("auto_apply_min_interval_s", 3) or 3),
-        "auto_apply_hysteresis_duty": int(cfg.get("auto_apply_hysteresis_duty", 5) or 5),
+    app_context = {
+        'cfg': load_config(),
+        'disks_ini': DISKS_INI,
+        'in_docker': _in_docker,
+        'app_version': APP_VERSION,
+        'disks_stale_warn_sec': DISKS_STALE_WARN_SEC,
+        'dbg_should': _dbg_should,
+        'warn_once': _warn_once
     }
-    try:
-        if _dbg_should("status", 10):
-            log.debug(
-                "status | mode=%s hdd_avg=%s ssd_avg=%s pwm=%s drives=%s",
-                mode, hdd.get("avg"), ssd.get("avg"), payload["recommended_pwm"], len(drives)
-            )
-        # One-time advisory if disks.ini is bind-mounted as a single file (can go stale on host rename)
-        try:
-            if _dbg_should("disks_ini_bind_advice", 9999999) and _is_bind_mounted_file(DISKS_INI):
-                log.warning("/unraid/disks.ini is bind-mounted as a single file; map the directory /var/local/emhttp -> /unraid:ro to see instant updates")
-        except Exception:
-            pass
-        # Warn periodically if disks.ini appears stale (> DISKS_STALE_WARN_SEC)
-        if disks_mtime:
-            try:
-                if (time.time() - float(disks_mtime)) > max(60, int(DISKS_STALE_WARN_SEC)) and _dbg_should("disks_ini_stale_warn", 600):
-                    age = int(time.time() - float(disks_mtime))
-                    log.warning("/unraid/disks.ini appears stale | age_s=%s", age)
-            except Exception:
-                pass
-    except Exception:
-        pass
-    try:
-        from services.history import record_status
-        record_status(hdd.get("avg", 0), ssd.get("avg", 0), payload["recommended_pwm"])
-    except Exception as e:
-        log.warning("failed to record history: %s", e)
-    return payload
+    return _compute_status_svc(app_context)
 @app.get("/health")
 def health():
     # Also drive auto-apply via the Docker healthcheck so PWM updates

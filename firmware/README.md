@@ -1,33 +1,17 @@
-FanBridge‑Link Firmware
-=======================
+# FanBridge-Link Firmware
 
-Manual install only: the FanBridge app does not flash firmware for you. Install this onto your microcontroller yourself.
+The FanBridge application does not flash firmware for you. You must manually install the firmware onto your FanBridge Link microcontroller.
 
-Install prebuilt (RP2040)
--------------------------
+## Installing the Prebuilt Firmware (RP2040)
 
-- Download UF2 (v1.0.0): https://github.com/RoBro92/fanbridge-link/releases/download/v1.0.0/fanbridge-link-rp2040-1.0.0.uf2
-- Other versions/boards: https://github.com/RoBro92/fanbridge-link/releases
-- Put the board into BOOTSEL (hold BOOTSEL while plugging in USB).
-- A `RPI-RP2` drive appears. Copy the UF2 to it and wait for reboot.
+To easily flash your FanBridge Link hardware:
 
-Edit and rebuild (optional)
----------------------------
+1. **Download UF2 Firmware**: [Download v1.0.0](https://github.com/RoBro92/fanbridge-link/releases/download/v1.0.0/fanbridge-link-rp2040-1.0.0.uf2) or check for [newer versions](https://github.com/RoBro92/fanbridge-link/releases).
+2. **Enter BOOTSEL Mode**: Hold the `BOOTSEL` button on your RP2040 board while plugging it in via USB.
+3. **Flash**: An `RPI-RP2` mass storage drive will appear on your computer. Copy the downloaded `.uf2` file to this drive.
+4. **Reboot**: The board will automatically reboot and run the firmware.
 
-- Open `firmware/rp2040/FanBridge_Link/FanBridge_Link.ino` in Arduino IDE.
-- Install “Raspberry Pi RP2040 Boards (by Earle Philhower)”. Board: “Raspberry Pi Pico”.
-- Tweak settings at the top of the file (e.g., `GATE_PIN`, PWM values).
-- Sketch → Export compiled Binary. Copy the generated `.uf2` to `RPI-RP2`.
+## Versioning Notes
 
-Arduino CLI (alternative)
--------------------------
-
-- `arduino-cli core update-index --additional-urls https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json`
-- `arduino-cli core install rp2040:rp2040 --additional-urls https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json`
-- `arduino-cli compile --fqbn rp2040:rp2040:rpipico --export-binaries firmware/rp2040/FanBridge_Link`
-
-Versioning notes
-----------------
-
-- Release assets are named `fanbridge-link-<board>-<version>.uf2` (for example, `fanbridge-link-rp2040-1.0.0.uf2`).
-- In the future, separate variants (e.g., different Arduino cores/boards) will publish as their own assets per release/tag.
+- Release assets follow the naming convention: `fanbridge-link-<board>-<version>.uf2` (e.g., `fanbridge-link-rp2040-1.0.0.uf2`).
+- Separate hardware variants will be published as distinct assets in the releases tab.

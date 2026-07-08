@@ -33,6 +33,8 @@ static const uint16_t KICK_MS           = 500;
 
 static uint8_t  userPct    = START_PERCENT; // 0..100 requested
 static uint16_t currentRaw = 0;             // 0..PWM_RANGE applied (inverted for sink)
+static unsigned long lastCmdTime = 0;       // Watchdog timer
+static bool fallbackTriggered = false;      // Watchdog flag
 
 // 0..100% -> raw 0..PWM_RANGE (inverted: 0%=high, 100%=low for open-collector sink)
 static inline uint16_t pctToRaw(uint8_t pct) {
@@ -135,10 +137,18 @@ static void rebootToBootsel() {
 static void handleLine(String line) {
   line.trim();
   if (!line.length()) return;
+
+  // Valid data received from host
+  lastCmdTime = millis();
+  if (fallbackTriggered) {
+    fallbackTriggered = false;
+  }
+
   String cmd = line; cmd.toUpperCase();
 
   if (cmd == "VERSION" || cmd == "VERSION?") { Serial.println(FW_VERSION); return; }
   if (cmd == "PING")                          { Serial.println(F("PONG")); return; }
+  if (cmd == "RPM" || cmd == "RPM?")          { Serial.println(F("RPM: 0")); return; }
   if (cmd == "UPTIME" || cmd == "UPTIME?")    { printUptime();             return; }
   if (cmd == "STATUS" || cmd == "STATUS?")    { printStatus();             return; }
   if (cmd == "TEST") {
@@ -188,13 +198,22 @@ void setup() {
 
   Serial.print(F("FANBRIDGE-LINK ")); Serial.print(FW_VERSION);
   Serial.println(F(" ready @115200 (PWM-only)"));
-  Serial.println(F("Commands: VERSION, PING, UPTIME, STATUS, TEST, BOOTSEL, 0..100"));
+  Serial.println(F("Commands: VERSION, PING, RPM, UPTIME, STATUS, TEST, BOOTSEL, 0..100"));
+  
+  lastCmdTime = millis(); // Initialize watchdog timer
 }
 
 void loop() {
   if (Serial.available()) {
     String line = Serial.readStringUntil('\n');
     handleLine(line);
+  }
+
+  // Hardware watchdog: 60 seconds without a serial command
+  if (millis() - lastCmdTime > 60000 && !fallbackTriggered) {
+    fallbackTriggered = true;
+    setFanPercent(100, false);
+    Serial.println(F("ERR: Serial timeout. Failsafe activated (100%)."));
   }
 }
 
