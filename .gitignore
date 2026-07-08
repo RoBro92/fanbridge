@@ -18,3 +18,4 @@ container/secret.key
 container/users.local.yml
 docker-compose.override.yml
 .env
+venv/
