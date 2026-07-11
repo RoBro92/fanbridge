@@ -1,6 +1,15 @@
-Version: 1.1.3
+Version: 1.1.4
 
 # Changelog
+
+## 1.1.4 — 2026-07-11
+
+Fixes
+- Removed `/api/stream` SSE endpoint to fix Gunicorn timeouts and serial connection drops. Reverted to HTTP polling.
+- Attached `RingBufferHandler` directly to the `fanbridge` logger to fix empty logs in the WebUI.
+- Added serial TX/RX debug logs for easier diagnostics.
+- Wrapped the PWM graph in a `<details>` tag to add a native collapsible UI arrow.
+- Fixed the Drives table header background color not displaying correctly in dark mode.
 
 ## 1.1.3 — 2025-09-15
 
