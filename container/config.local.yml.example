@@ -22,5 +22,5 @@ sim:
 
 # RP firmware update (UI can change repo_url)
 rp:
-  repo_url: https://raw.githubusercontent.com/RoBro92/fanbridge-link/main
+  repo_url: https://raw.githubusercontent.com/RoBro92/fanbridge/main/firmware
   board: rp2040

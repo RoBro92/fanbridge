@@ -344,7 +344,7 @@ DEFAULT_CONFIG = {
     "rp": {
         # URL hosting a manifest.json and UF2 files; adjustable in UI
         # Example expected: <base>/manifest.json -> { items: [{ board, version, url }] }
-        "repo_url": "https://raw.githubusercontent.com/RoBro92/fanbridge-link/main",
+        "repo_url": "https://raw.githubusercontent.com/RoBro92/fanbridge/main/firmware",
         # Optional: override board name; default 'rp2040'
         "board": "rp2040",
         # Optional: preferred RP2 block device path (e.g., /dev/disk/by-id/...-part1 or /dev/sdX1)
