@@ -1,6 +1,10 @@
-Version: 1.2.1
+Version: 1.2.2
 
 # Changelog
+
+## 1.2.2 — 2026-07-12
+- Added safeguard to prevent UI hangs during firmware updates without proper Docker `/dev` mapping.
+- Enhanced firmware STATUS parser to beautifully format new JSON diagnostics.
 
 ## 1.2.1 — 2026-07-12
 - Split firmware and app release pipelines
