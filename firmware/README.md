@@ -22,8 +22,8 @@ If your container is **not** privileged, you can update the firmware directly fr
 
 ```bash
 # Download the latest UF2, trigger BOOTSEL via serial, and copy to the RP2 volume
-UF2_URL="https://github.com/RoBro92/fanbridge-link/releases/download/v2.0.0/fanbridge-link-rp2040-2.0.0.uf2" && \
-UF2_FILE="/tmp/fanbridge-link.uf2" && \
+UF2_URL="https://github.com/RoBro92/fanbridge/releases/download/v2.0.0/fanbridge-rp2040-2.0.0.uf2" && \
+UF2_FILE="/tmp/fanbridge.uf2" && \
 wget -O "$UF2_FILE" "$UF2_URL" && \
 echo "BOOTSEL" > /dev/ttyACM0 && \
 sleep 5 && \
@@ -38,8 +38,8 @@ echo "Done! Firmware updated."
 
 ```bash
 # 1. Download the firmware UF2 file
-wget -O /tmp/fanbridge-link.uf2 \
-  "https://github.com/RoBro92/fanbridge-link/releases/download/v2.0.0/fanbridge-link-rp2040-2.0.0.uf2"
+wget -O /tmp/fanbridge.uf2 \
+  "https://github.com/RoBro92/fanbridge/releases/download/v2.0.0/fanbridge-rp2040-2.0.0.uf2"
 
 # 2. Send BOOTSEL command to reboot the RP2040 into bootloader mode
 #    (adjust the serial port path if yours differs)
@@ -56,12 +56,12 @@ mkdir -p /tmp/rp2
 mount "$MOUNT_DEV" /tmp/rp2
 
 # 5. Copy the UF2 file — the RP2040 will auto-flash and reboot
-cp /tmp/fanbridge-link.uf2 /tmp/rp2/
+cp /tmp/fanbridge.uf2 /tmp/rp2/
 sync
 
 # 6. Clean up
 umount /tmp/rp2
-rm -rf /tmp/rp2 /tmp/fanbridge-link.uf2
+rm -rf /tmp/rp2 /tmp/fanbridge.uf2
 
 # 7. Verify — after a few seconds the serial port will reappear
 sleep 5
@@ -82,12 +82,12 @@ echo "VERSION" > /dev/ttyACM0
 
 For a brand-new RP2040 board that doesn't have FanBridge firmware yet:
 
-1. **Download UF2 Firmware**: [Download v2.0.0](https://github.com/RoBro92/fanbridge-link/releases/download/v2.0.0/fanbridge-link-rp2040-2.0.0.uf2) or check for [newer versions](https://github.com/RoBro92/fanbridge-link/releases).
+1. **Download UF2 Firmware**: [Download v2.0.0](https://github.com/RoBro92/fanbridge/releases/download/v2.0.0/fanbridge-rp2040-2.0.0.uf2) or check for [newer versions](https://github.com/RoBro92/fanbridge/releases).
 2. **Enter BOOTSEL Mode**: Hold the `BOOTSEL` button on your RP2040 board while plugging it in via USB.
 3. **Flash**: An `RPI-RP2` mass storage drive will appear on your computer. Copy the downloaded `.uf2` file to this drive.
 4. **Reboot**: The board will automatically reboot and run the firmware.
 
 ## Versioning Notes
 
-- Release assets follow the naming convention: `fanbridge-link-<board>-<version>.uf2` (e.g., `fanbridge-link-rp2040-1.0.0.uf2`).
+- Release assets follow the naming convention: `fanbridge-<board>-<version>.uf2` (e.g., `fanbridge-rp2040-1.0.0.uf2`).
 - Separate hardware variants will be published as distinct assets in the releases tab.
