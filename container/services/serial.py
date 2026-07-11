@@ -183,11 +183,13 @@ def serial_send_line(line: str, expect_reply: bool = True, timeout: float = 1.0)
     try:
         payload = (line or "").strip() + "\n"
         data = payload.encode("utf-8", errors="ignore")
+        _log().debug("Serial TX: %s", (line or "").strip())
         s.write(data)
         s.flush()
         if expect_reply:
             resp = s.readline().decode("utf-8", errors="ignore").strip()
             out["reply"] = resp if resp else None
+            _log().debug("Serial RX: %s", out["reply"])
         out["ok"] = True
         return out
     except Exception as e:
