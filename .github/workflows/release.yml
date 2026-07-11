@@ -47,20 +47,6 @@ jobs:
           fi
           echo "BODY_FILE=RELEASE_SECTION.md" >> $GITHUB_OUTPUT
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install PlatformIO
-        run: pip install platformio
-
-      - name: Build RP2040 Firmware
-        run: |
-          cd firmware/rp2040
-          pio run
-          cp .pio/build/pico/firmware.uf2 ../../fanbridge-rp2040-${{ env.VER_NO_V }}.uf2
-
       - name: Create/Update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -69,6 +55,4 @@ jobs:
           body_path: ${{ steps.notes.outputs.BODY_FILE }}
           draft: false
           prerelease: false
-          files: |
-            fanbridge-rp2040-${{ env.VER_NO_V }}.uf2
 
