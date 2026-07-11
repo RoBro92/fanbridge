@@ -57,6 +57,9 @@ def setup_logging() -> None:
     try:
         if not any(isinstance(h, RingBufferHandler) for h in root.handlers):
             root.addHandler(RingBufferHandler())
+        fb = logging.getLogger("fanbridge")
+        if not any(isinstance(h, RingBufferHandler) for h in fb.handlers):
+            fb.addHandler(RingBufferHandler())
     except Exception:
         pass
     root.setLevel(level)
@@ -83,5 +86,8 @@ def ensure_handlers() -> None:
         root = logging.getLogger()
         if not any(isinstance(h, RingBufferHandler) for h in root.handlers):
             root.addHandler(RingBufferHandler())
+        fb = logging.getLogger("fanbridge")
+        if not any(isinstance(h, RingBufferHandler) for h in fb.handlers):
+            fb.addHandler(RingBufferHandler())
     except Exception:
         pass
