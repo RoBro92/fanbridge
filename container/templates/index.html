@@ -230,6 +230,7 @@
       --pillbg: rgba(51, 65, 85, 0.5);
       --border: rgba(255, 255, 255, 0.1);
       --accent: #38bdf8;
+      --thbg: rgba(30, 41, 59, 0.9);
     }
     body {
       background: linear-gradient(135deg, #0f172a, #1e1b4b);
@@ -292,9 +293,10 @@
 
   <div id="panel-main">
   
-  <div class="chart-container">
+  <details class="chart-container" open>
+    <summary style="cursor: pointer; font-weight: 600; color: var(--muted); margin-bottom: 10px; user-select: none;">PWM & Temperature Graph</summary>
     <canvas id="historyChart" height="100"></canvas>
-  </div>
+  </details>
   <table id="tbl">
 
     <thead>
@@ -657,22 +659,15 @@
       if (pollTimer) clearInterval(pollTimer);
       if (pollTimerSerial) clearInterval(pollTimerSerial);
       const ms = Math.max(3, Math.min(60, pollSeconds))*1000;
-      // Replaced normal polling with SSE
-      if (window.evtSource) window.evtSource.close();
-      window.evtSource = new EventSource('/api/stream');
-      window.evtSource.onmessage = function(e) {
-         // SSE updates
-         refresh(JSON.parse(e.data));
-         refreshSerial();
-      };
+      pollTimer = setInterval(refresh, ms);
+      pollTimerSerial = setInterval(refreshSerial, ms);
+      const pb = document.getElementById('pollbtn');
+      if (pb) pb.textContent = `refresh: every ${Math.max(3, Math.min(60, pollSeconds))}s`;
+      if (pb) pb.title = 'Click to change the refresh interval (3–60 seconds)';
       
       // Still fetch history periodically
       setInterval(fetchHistory, 30000);
       fetchHistory();
-      
-      const pb = document.getElementById('pollbtn');
-      if (pb) pb.textContent = `live updates: SSE`;
-      if (pb) pb.title = 'SSE stream active';
     }
     
     let historyChart = null;
@@ -723,17 +718,6 @@
           }
         }
       });
-    }
-
-    function _startPolling_old(){
-      if (pollTimer) clearInterval(pollTimer);
-      if (pollTimerSerial) clearInterval(pollTimerSerial);
-      const ms = Math.max(3, Math.min(60, pollSeconds))*1000;
-      pollTimer = setInterval(refresh, ms);
-      pollTimerSerial = setInterval(refreshSerial, ms);
-      const pb = document.getElementById('pollbtn');
-      if (pb) pb.textContent = `refresh: every ${Math.max(3, Math.min(60, pollSeconds))}s`;
-      if (pb) pb.title = 'Click to change the refresh interval (3–60 seconds)';
     }
     // Logs polling
     let logsTimer = null;

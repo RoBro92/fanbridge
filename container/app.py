@@ -905,31 +905,7 @@ def history():
     return jsonify({"ok": True, "history": get_history(hours)})
 
 
-@app.get("/api/stream")
-def api_stream():
-    def event_stream():
-        while True:
-            # Re-compute status and yield it
-            data = compute_status()
-            try:
-                ss = serial_svc.get_serial_status(full=False)
-                data["serial"] = {
-                    "preferred": ss.get("preferred"),
-                    "available": ss.get("available"),
-                    "connected": ss.get("connected"),
-                    "baud": ss.get("baud"),
-                    "message": ss.get("message"),
-                }
-            except Exception as e:
-                logging.getLogger("fanbridge").exception("serial status embed failed: %s", e)
-                data["serial"] = {"available": False, "connected": False, "message": "error"}
-            
-            import json
-            yield f"data: {json.dumps(data)}\n\n"
-            time.sleep(3)  # Push updates every 3 seconds
 
-    from flask import Response
-    return Response(event_stream(), mimetype="text/event-stream")
 
 # --------- API: Serial endpoints moved to api/serial blueprint ---------
 
