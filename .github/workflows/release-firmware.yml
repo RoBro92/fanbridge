@@ -1,0 +1,61 @@
+name: Create Firmware Release
+
+on:
+  push:
+    tags: [ 'fw-v*' ]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to create/update firmware release for (e.g., fw-v2.0.0)'
+        required: true
+        default: ''
+
+jobs:
+  release-firmware:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Determine ref and version
+        id: ref
+        run: |
+          REF_NAME="${GITHUB_REF_NAME}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag }}" ]; then
+            REF_NAME="${{ inputs.tag }}"
+          fi
+          echo "REF_NAME=${REF_NAME}" >> $GITHUB_ENV
+          
+          # Remove 'fw-v' prefix to get the raw version number (e.g., fw-v2.0.0 -> 2.0.0)
+          VER_NO_V="${REF_NAME#fw-v}"
+          echo "VER_NO_V=${VER_NO_V}" >> $GITHUB_ENV
+
+      - name: Checkout repo at tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: refs/tags/${{ env.REF_NAME }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build RP2040 Firmware
+        run: |
+          cd firmware/rp2040
+          pio run
+          cp .pio/build/pico/firmware.uf2 ../../fanbridge-rp2040-${{ env.VER_NO_V }}.uf2
+
+      - name: Create/Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.REF_NAME }}
+          name: Firmware ${{ env.VER_NO_V }}
+          body: "Automated RP2040 firmware release for FanBridge Link. Download the `.uf2` file below to flash your device."
+          draft: false
+          prerelease: false
+          files: |
+            fanbridge-rp2040-${{ env.VER_NO_V }}.uf2
