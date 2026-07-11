@@ -1,6 +1,11 @@
-Version: 1.1.5
+Version: 1.1.6
 
 # Changelog
+
+## 1.1.6 — 2026-07-11
+
+Enhancements
+- Improved PWM & Temperature Graph UI: Made chart width uniform with config panels, added a timeframe selector (1h to 1m), and implemented smart data downsampling for longer time ranges to prevent browser overload.
 
 ## 1.1.5 — 2026-07-11
 
