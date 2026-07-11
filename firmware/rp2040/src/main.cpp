@@ -11,7 +11,7 @@ static mbed::PwmOut* fanPwm = nullptr;
 
 // --------------------------------------------------------------------------------------
 // Firmware info
-static const char* FW_VERSION = "1.0.0";
+static const char* FW_VERSION = "2.0.0";
 
 // User-adjustable settings
 // - GATE_PIN: RP2040 GPIO that drives the 2N3904 base via ~1k resistor

@@ -2,6 +2,13 @@
   "items": [
     {
       "board": "rp2040",
+      "version": "2.0.0",
+      "url": "https://github.com/RoBro92/fanbridge-link/releases/download/v2.0.0/fanbridge-link-rp2040-2.0.0.uf2",
+      "notes": "USB firmware update support via FanBridge UI",
+      "flash_method": "rp2040_uf2"
+    },
+    {
+      "board": "rp2040",
       "version": "1.0.0",
       "url": "https://github.com/RoBro92/fanbridge-link/releases/download/v1.0.0/fanbridge-link-rp2040-1.0.0.uf2",
       "notes": "Built from firmware/rp2040/FanBridge_Link via CI",
