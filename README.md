@@ -56,9 +56,21 @@ Install FanBridge directly through the Unraid Community Applications plugin for 
 |---|---|---|
 | **Device mapping** | Leave blank by default | Allows Docker to start even if the controller is unplugged. You can map the device later when connected. |
 | **Serial path** | `/dev/serial/by-id` (read-only) | Optional mapping for stable path naming. |
-| **Privileged** | Off | No cgroup rules or group-add are required when using standard device mapping. |
+| **Privileged** | Off (see note below) | Not required for normal operation. Only needed for in-app firmware updates. |
 
 *Note: The preferred serial port defaults to `/dev/ttyACM0` (RP2040). You may override this via the `FANBRIDGE_SERIAL_PORT` environment variable.*
+
+#### Enabling In-App Firmware Updates (Optional)
+
+To use the firmware update feature from the FanBridge web UI, the container requires privileged access to mount the RP2040 BOOTSEL volume. Add these **advanced** settings in the Unraid Docker template:
+
+| Parameter | Setting | Description |
+|---|---|---|
+| **Privileged** | On (or add `CAP_SYS_ADMIN`) | Required to mount the RPI-RP2 FAT volume inside the container. |
+| **USB Bus** | `/dev/bus/usb` → `/dev/bus/usb` (rw) | Allows the container to see the RP2040 after it changes USB identity during BOOTSEL. |
+| **Disk by-label** | `/dev/disk/by-label` → `/dev/disk/by-label` (ro) | Helps the container locate the RPI-RP2 boot volume by label. |
+
+If you prefer not to run privileged, you can update firmware from the Unraid terminal instead — see the [firmware update guide](firmware/README.md).
 
 ### Production Tips
 
@@ -66,6 +78,15 @@ Install FanBridge directly through the Unraid Community Applications plugin for 
 - **Workers:** Tune Gunicorn via environment variables: `GUNICORN_WORKERS` (default 2) and `GUNICORN_TIMEOUT` (default 30).
 - **Metrics:** Scrape `/metrics` (text format) for basic counters.
 - **Session Secret:** Generated on the first run and persisted at `/config/secret.key` (Docker) or `container/secret.key` (local).
+
+## Firmware Updates
+
+| Method | Requires Privileged | Description |
+|---|---|---|
+| **In-App** (Serial → Link Updates) | Yes | Flash from the web UI — either from the configured repo or by uploading a `.uf2` file. |
+| **Unraid Terminal** | No | Run commands directly on the Unraid host via SSH or the web terminal. |
+
+For full instructions on both methods, see the [firmware update guide](firmware/README.md).
 
 ## Roadmap
 

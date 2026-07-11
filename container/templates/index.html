@@ -485,8 +485,35 @@
           <div>Latest: <span id="rpLatest">—</span></div>
           <div>Manifest: <a id="rpManifest" href="#" target="_blank" rel="noopener">—</a></div>
         </div>
-        <div class="serial-row" style="margin-top:10px;">
-          <button id="rpFlashLatest" disabled title="Coming soon">Coming soon</button>
+        <!-- Privileged: show flash controls -->
+        <div id="rpFlashControls">
+          <div class="serial-row" style="margin-top:10px;">
+            <button id="rpFlashLatest" title="Install the latest firmware from the configured repo">Install latest</button>
+          </div>
+          <div class="serial-row" style="margin-top:8px; align-items:center; gap:8px;">
+            <span class="small muted">or upload a .uf2 file:</span>
+            <label class="pill small" style="cursor:pointer; display:inline-flex; align-items:center; gap:4px;" title="Select a local .uf2 firmware file to flash">
+              <input type="file" id="rpUf2File" accept=".uf2" style="display:none;" />
+              <span id="rpUf2Label">Choose file…</span>
+            </label>
+            <button id="rpFlashUpload" disabled title="Flash the selected .uf2 file">Flash file</button>
+          </div>
+        </div>
+        <!-- Unprivileged: show help instead -->
+        <div id="rpFlashHelp" style="display:none; margin-top:10px;">
+          <div class="small" style="padding:10px; border-radius:8px; background:rgba(250,204,21,.08); border:1px solid rgba(250,204,21,.25);">
+            <strong style="color:#facc15;">⚠ Privileged container required</strong>
+            <p style="margin:6px 0 0; color:var(--muted);">
+              In-app firmware updates require a privileged container (or CAP_SYS_ADMIN) so the RP2040 BOOTSEL volume can be mounted.<br/>
+              You can update the firmware directly from the Unraid terminal instead.
+            </p>
+            <div style="margin-top:8px;">
+              <a id="rpHelpLink" href="https://github.com/RoBro92/fanbridge/blob/main/firmware/README.md" target="_blank" rel="noopener"
+                 class="pill small" style="text-decoration:none; display:inline-flex; align-items:center; gap:4px;">
+                📖 Update guide
+              </a>
+            </div>
+          </div>
         </div>
         <div id="rpWarn" class="warnmsg small" style="display:none;"></div>
       </div>
@@ -571,7 +598,7 @@
   <!-- Modal: RP Flash Confirm -->
   <div id="rpFlashConfirm" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); align-items:center; justify-content:center; z-index:1100;">
     <div style="background: var(--cardbg); color: var(--fg); border:1px solid var(--border); border-radius:10px; padding:16px; width: min(520px, 92vw); box-shadow: 0 10px 30px rgba(0,0,0,.3);">
-      <h3 style="margin:0 0 10px;">Install latest firmware</h3>
+      <h3 style="margin:0 0 10px;" id="rpFlashConfirmTitle">Install firmware</h3>
       <p class="small" style="margin:0 0 10px; color:var(--muted);">
         The controller will reboot into BOOTSEL mode, the UF2 will be copied, and then it will reconnect. Do not unplug it during the process.
       </p>
@@ -828,6 +855,9 @@
         if (priv){
           priv.textContent = 'privileged: ' + (j.privileged ? 'yes' : 'no');
           priv.className = 'pill small ' + (j.privileged ? 'ok' : 'warn');
+          priv.title = j.privileged
+            ? 'Container has CAP_SYS_ADMIN — in-app firmware updates are available'
+            : 'Container is unprivileged — in-app firmware updates are disabled. Use the Unraid terminal instead.';
         }
         if (upd){
           upd.textContent = 'update: ' + (j.update_available ? 'available' : 'none');
@@ -848,8 +878,15 @@
         if (board) board.textContent = j.board || 'rp2040';
         if (latest) latest.textContent = j.latest ? `${j.latest.board}-${j.latest.version}` : '—';
         if (manifest){ manifest.textContent = j.manifest_url || '—'; manifest.href = j.manifest_url || '#'; }
-        if (!j.privileged){
-          if (warn){ warn.style.display=''; warn.textContent='Container is not privileged; flashing may fail to detect/mount RPI-RP2.'; }
+        // Toggle flash controls vs help based on privileged status
+        const flashControls = document.getElementById('rpFlashControls');
+        const flashHelp = document.getElementById('rpFlashHelp');
+        if (j.privileged){
+          if (flashControls) flashControls.style.display = '';
+          if (flashHelp) flashHelp.style.display = 'none';
+        } else {
+          if (flashControls) flashControls.style.display = 'none';
+          if (flashHelp) flashHelp.style.display = '';
         }
       } catch(e){
         if (priv){ priv.textContent = 'privileged: ?'; priv.className='pill small'; }
@@ -1604,18 +1641,25 @@ function applyValidation(){
     })();
   </script>
   <script>
-    // RP repo controls and flash
+    // RP repo controls and flash (repo + file upload)
     (function(){
       const saveBtn = document.getElementById('rpSaveRepo');
       const urlEl = document.getElementById('rpRepoUrl');
       const flashBtn = document.getElementById('rpFlashLatest');
       const warn = document.getElementById('rpWarn');
       const confirmModal = document.getElementById('rpFlashConfirm');
+      const confirmTitle = document.getElementById('rpFlashConfirmTitle');
       const confirmBtn = document.getElementById('rpFlashConfirmBtn');
       const cancelBtn = document.getElementById('rpFlashCancel');
       const progModal = document.getElementById('rpFlashProgress');
       const progBox = document.getElementById('rpProgLog');
       const progClose = document.getElementById('rpProgClose');
+      const uf2Input = document.getElementById('rpUf2File');
+      const uf2Label = document.getElementById('rpUf2Label');
+      const uploadBtn = document.getElementById('rpFlashUpload');
+
+      // Track which flash mode the confirm modal should trigger
+      let flashMode = 'repo'; // 'repo' or 'upload'
 
       function openConfirm(){ if (confirmModal) { confirmModal.style.display = 'flex'; } }
       function closeConfirm(){ if (confirmModal) { confirmModal.style.display = 'none'; } }
@@ -1632,6 +1676,29 @@ function applyValidation(){
       }
       function bindClose(){ if (progClose){ progClose.disabled = false; progClose.addEventListener('click', ()=>{ closeProgress(); refreshRp(); }); } }
 
+      // Shared: render progress steps from server response
+      function renderSteps(j, r){
+        const steps = (j && Array.isArray(j.progress)) ? j.progress : [];
+        for (const s of steps){
+          const ok = (s.ok === undefined) ? '' : (s.ok ? 'ok' : 'error');
+          const extra = (()=>{
+            const keys = Object.keys(s).filter(k=>!['ts','msg','ok'].includes(k));
+            if (!keys.length) return '';
+            return ' ' + keys.map(k=>`${k}=${s[k]}`).join(' ');
+          })();
+          progAppend(`${s.msg}${extra}`, ok);
+        }
+        if (!r.ok || !j.ok){
+          const status = `${r.status||''} ${r.statusText||''}`.trim();
+          const msg = j.error || (status ? `Flash failed (${status})` : 'Flash failed');
+          progAppend('ERROR: ' + msg, 'error');
+          showToast(msg, 'error');
+        } else {
+          progAppend('Firmware update complete. You may now close this window.', 'ok');
+          showToast('Flashed firmware ' + (j.version || j.controller_version || ''), 'ok');
+        }
+      }
+
       async function saveRepo(){
         if (!urlEl || !urlEl.value) return;
         try{
@@ -1642,11 +1709,15 @@ function applyValidation(){
           refreshRp();
         }catch(e){ showToast('Failed to save repo URL', 'error'); }
       }
-      async function flashLatest(){
+
+      // --- Repo-based flash ---
+      function flashLatest(){
+        flashMode = 'repo';
+        if (confirmTitle) confirmTitle.textContent = 'Install latest firmware';
         if (warn){ warn.style.display='none'; warn.textContent=''; }
         openConfirm();
       }
-      async function doFlash(){
+      async function doFlashRepo(){
         closeConfirm();
         openProgress();
         if (progBox) progBox.innerHTML = '';
@@ -1655,32 +1726,59 @@ function applyValidation(){
           flashBtn.disabled = true; flashBtn.textContent = 'Flashing…';
           const r = await fetch('/api/rp/flash', { method:'POST', headers: { 'Content-Type':'application/json', 'X-CSRF-Token': CSRF }, body: JSON.stringify({}) });
           const j = await r.json().catch(()=>({}));
-          const steps = (j && Array.isArray(j.progress)) ? j.progress : [];
-          for (const s of steps){
-            const ok = (s.ok === undefined) ? '' : (s.ok ? 'ok' : 'error');
-            const extra = (()=>{
-              const keys = Object.keys(s).filter(k=>!['ts','msg','ok'].includes(k));
-              if (!keys.length) return '';
-              return ' ' + keys.map(k=>`${k}=${s[k]}`).join(' ');
-            })();
-            progAppend(`${s.msg}${extra}`, ok);
-          }
-          if (!r.ok || !j.ok){
-            const status = `${r.status||''} ${r.statusText||''}`.trim();
-            const msg = j.error || (status ? `Flash failed (${status})` : 'Flash failed');
-            progAppend('ERROR: ' + msg, 'error');
-            showToast(msg, 'error');
-          } else {
-            progAppend('Firmware update complete. You may now close this window.', 'ok');
-            showToast('Flashed firmware ' + (j.version || ''), 'ok');
-          }
+          renderSteps(j, r);
         }catch(e){ progAppend('Unexpected error during flash', 'error'); showToast('Flash failed', 'error'); }
         finally{ flashBtn.disabled = false; flashBtn.textContent = 'Install latest'; bindClose(); setTimeout(refreshRp, 1500); }
       }
+
+      // --- File upload flash ---
+      if (uf2Input){
+        uf2Input.addEventListener('change', ()=>{
+          const name = uf2Input.files && uf2Input.files[0] ? uf2Input.files[0].name : null;
+          if (uf2Label) uf2Label.textContent = name || 'Choose file…';
+          if (uploadBtn) uploadBtn.disabled = !name;
+        });
+      }
+      function flashUpload(){
+        if (!uf2Input || !uf2Input.files || !uf2Input.files[0]) return;
+        flashMode = 'upload';
+        if (confirmTitle) confirmTitle.textContent = 'Flash uploaded firmware: ' + uf2Input.files[0].name;
+        if (warn){ warn.style.display='none'; warn.textContent=''; }
+        openConfirm();
+      }
+      async function doFlashUpload(){
+        closeConfirm();
+        openProgress();
+        if (progBox) progBox.innerHTML = '';
+        const file = uf2Input.files[0];
+        progAppend('Uploading ' + file.name + ' (' + (file.size/1024).toFixed(1) + ' KB)…');
+        try{
+          if (uploadBtn) { uploadBtn.disabled = true; uploadBtn.textContent = 'Flashing…'; }
+          const fd = new FormData();
+          fd.append('file', file);
+          const r = await fetch('/api/rp/flash_upload', { method:'POST', headers: { 'X-CSRF-Token': CSRF }, body: fd });
+          const j = await r.json().catch(()=>({}));
+          renderSteps(j, r);
+        }catch(e){ progAppend('Unexpected error during flash', 'error'); showToast('Flash failed', 'error'); }
+        finally{
+          if (uploadBtn) { uploadBtn.disabled = false; uploadBtn.textContent = 'Flash file'; }
+          if (uf2Input) uf2Input.value = '';
+          if (uf2Label) uf2Label.textContent = 'Choose file…';
+          bindClose(); setTimeout(refreshRp, 1500);
+        }
+      }
+
+      // --- Confirm modal dispatches to the correct flash mode ---
+      function doFlash(){
+        if (flashMode === 'upload') doFlashUpload();
+        else doFlashRepo();
+      }
+
       if (saveBtn) saveBtn.addEventListener('click', saveRepo);
       if (urlEl) urlEl.addEventListener('keydown', (ev)=>{ if (ev.key === 'Enter') saveRepo(); });
-      // Flash coming soon: button disabled; no action bound
+      // Flash button: opens confirm modal → confirm triggers doFlash()
       if (flashBtn) flashBtn.addEventListener('click', flashLatest);
+      if (uploadBtn) uploadBtn.addEventListener('click', flashUpload);
       if (confirmBtn) confirmBtn.addEventListener('click', doFlash);
       if (cancelBtn) cancelBtn.addEventListener('click', closeConfirm);
       if (confirmModal) confirmModal.addEventListener('click', (ev)=>{ if (ev.target === confirmModal) closeConfirm(); });
