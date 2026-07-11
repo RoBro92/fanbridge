@@ -1,6 +1,20 @@
-Version: 1.1.6
+Version: 1.2.0
 
 # Changelog
+
+## 1.2.0 — 2026-07-11
+
+Features
+- **In-app RP2040 firmware updates**: Flash the latest firmware from the configured repo or upload a custom `.uf2` file directly from the FanBridge web UI (requires privileged container or CAP_SYS_ADMIN).
+- **Local UF2 file upload**: New `POST /api/rp/flash_upload` endpoint accepts multipart file uploads for custom firmware builds.
+- **Privileged/unprivileged UI split**: When the container is not privileged, flash buttons are replaced with a help link to the firmware update guide with Unraid terminal commands.
+- **Firmware v2.0.0**: Bumped RP2040 firmware version for testing the update flow.
+
+Infrastructure
+- Added `util-linux` and `usbutils` packages to the Docker image for mount/umount and USB debugging support.
+- Added optional `/dev/bus/usb` and `/dev/disk/by-label` mappings to the Unraid Docker template (advanced settings).
+- Updated `firmware/README.md` with complete host-side update commands and troubleshooting guide.
+- Updated privilege pill tooltips to explain firmware update implications.
 
 ## 1.1.6 — 2026-07-11
 

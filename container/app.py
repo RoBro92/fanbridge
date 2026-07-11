@@ -1154,6 +1154,160 @@ def api_rp_flash():
             pass
         return jsonify({"ok": False, "error": str(e), "progress": steps}), 500
 
+# --------- API: Flash uploaded UF2 file ---------
+@app.post("/api/rp/flash_upload")
+def api_rp_flash_upload():
+    """Flash a locally-uploaded .uf2 file to the RP2040 controller.
+
+    Accepts a multipart/form-data POST with a 'file' field containing the UF2.
+    The process mirrors /api/rp/flash but uses the uploaded file instead of
+    downloading from a remote manifest URL.
+    """
+    steps: list[dict] = []
+    def logstep(msg: str, ok: bool | None = None, **kv):
+        entry = {"ts": int(time.time()), "msg": msg}
+        if ok is not None:
+            entry["ok"] = bool(ok)
+        if kv:
+            entry.update(kv)
+        steps.append(entry)
+    try:
+        # Validate file upload
+        if 'file' not in request.files:
+            logstep("no file uploaded", ok=False)
+            return jsonify({"ok": False, "error": "no file uploaded", "progress": steps}), 400
+        uf2_file = request.files['file']
+        if not uf2_file.filename:
+            logstep("empty filename", ok=False)
+            return jsonify({"ok": False, "error": "empty filename", "progress": steps}), 400
+        if not uf2_file.filename.lower().endswith('.uf2'):
+            logstep("file must be a .uf2", ok=False)
+            return jsonify({"ok": False, "error": "file must be a .uf2", "progress": steps}), 400
+
+        # Ensure serial connection for BOOTSEL command
+        sstat = serial_svc.get_serial_status(full=True)
+        if not sstat.get("connected"):
+            logstep("controller not connected", ok=False)
+            return jsonify({"ok": False, "error": "controller not connected", "progress": steps}), 400
+
+        # Save uploaded file to temp location
+        tmp_fd, tmp_path = tempfile.mkstemp(prefix="fw-upload-", suffix=".uf2")
+        os.close(tmp_fd)
+        tmp_uf2 = tmp_path
+        try:
+            uf2_file.save(tmp_path)
+            fsize = os.path.getsize(tmp_path)
+            logstep("saved uploaded file", ok=True, filename=uf2_file.filename, bytes=fsize)
+        except Exception as e:
+            logstep("failed to save upload", ok=False, error=str(e))
+            try: os.remove(tmp_path)
+            except Exception: pass
+            return jsonify({"ok": False, "error": f"failed to save upload: {e}", "progress": steps}), 500
+
+        # 1) Reboot controller into BOOTSEL
+        logstep("sending BOOTSEL")
+        serial_svc.serial_send_line("BOOTSEL", expect_reply=False)
+        time.sleep(0.6)
+
+        # 2) Poll for RPI-RP2 block device
+        dev = None
+        deadline = time.time() + 40.0
+        logstep("waiting for RPI-RP2 device")
+        while time.time() < deadline:
+            try:
+                c2 = load_config()
+                pref_dev = (c2.get("rp", {}) or {}).get("rp2_device") if isinstance(c2, dict) else ""
+                if pref_dev and os.path.exists(pref_dev) and _is_block_device(pref_dev):
+                    dev = str(pref_dev)
+            except Exception:
+                pass
+            if not dev:
+                dev = _find_rp2_dev_symlink() or _find_rp2_block_device()
+            if dev:
+                logstep("found RPI-RP2 device", ok=True, device=dev)
+                break
+            time.sleep(0.6)
+        if not dev:
+            logstep("RPI-RP2 device not detected (is container privileged?)", ok=False)
+            try: os.remove(tmp_uf2)
+            except Exception: pass
+            return jsonify({"ok": False, "error": "RPI-RP2 device not detected (is container privileged?)", "progress": steps}), 503
+
+        # 3) Mount, copy UF2, unmount
+        mnt = tempfile.mkdtemp(prefix="rp2-")
+        logstep("mounting RP2", mount=mnt)
+        ok_mount, err = _mount_device(dev, mnt)
+        if not ok_mount:
+            try: shutil.rmtree(mnt, ignore_errors=True)
+            except Exception: pass
+            try: os.remove(tmp_uf2)
+            except Exception: pass
+            logstep("mount failed", ok=False, error=str(err or "unknown"))
+            return jsonify({"ok": False, "error": f"mount failed: {err}", "progress": steps}), 503
+
+        try:
+            dst = os.path.join(mnt, os.path.basename(tmp_path) or "update.uf2")
+            try:
+                size = os.path.getsize(tmp_path)
+                logstep("copying UF2 to RP2", bytes=size, dst=dst)
+                shutil.copy2(tmp_path, dst)
+                time.sleep(1.0)
+            except Exception as e:
+                logstep("copy failed", ok=False, error=str(e))
+                return jsonify({"ok": False, "error": f"copy failed: {e}", "progress": steps}), 503
+
+            # Wait for CDC re-enumeration and read version
+            re_ver = None
+            logstep("waiting for device to re-enumerate")
+            t_end = time.time() + 30.0
+            while time.time() < t_end:
+                try:
+                    res = serial_svc.serial_send_line("version", expect_reply=True, timeout=0.5)
+                    if res.get("ok") and res.get("reply"):
+                        re_ver = (res.get("reply") or "").strip() or None
+                        logstep("controller version read", ok=True, version=re_ver)
+                        break
+                except Exception:
+                    pass
+                time.sleep(0.5)
+
+            # Ping test
+            ping_ok = None
+            try:
+                pres = serial_svc.serial_send_line("PING", expect_reply=True, timeout=0.6)
+                ping_ok = (pres.get("reply") == "PONG")
+                logstep("ping test", ok=bool(ping_ok), reply=pres.get("reply"))
+            except Exception as e:
+                logstep("ping test error", ok=False, error=str(e))
+
+            logstep("finished", ok=True)
+            return jsonify({
+                "ok": True,
+                "device": dev,
+                "mount": mnt,
+                "filename": uf2_file.filename,
+                "controller_version": re_ver,
+                "progress": steps,
+            })
+        finally:
+            try:
+                _umount(mnt)
+            except Exception:
+                pass
+            try:
+                shutil.rmtree(mnt, ignore_errors=True)
+            except Exception:
+                pass
+            if tmp_uf2:
+                try: os.remove(tmp_uf2)
+                except Exception: pass
+    except Exception as e:
+        try:
+            logstep("unexpected error", ok=False, error=str(e))
+        except Exception:
+            pass
+        return jsonify({"ok": False, "error": str(e), "progress": steps}), 500
+
 # --------- API: Exclude device ---------
 @app.post("/api/exclude")
 def api_exclude():
