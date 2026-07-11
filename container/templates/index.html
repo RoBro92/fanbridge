@@ -252,7 +252,7 @@
     }
     .chart-container {
       width: 100%;
-      max-width: 905px;
+      max-width: 874px;
       margin: 20px 0;
       padding: 15px;
       background: var(--cardbg);
@@ -295,6 +295,15 @@
   
   <details class="chart-container" open>
     <summary style="cursor: pointer; font-weight: 600; color: var(--muted); margin-bottom: 10px; user-select: none;">PWM & Temperature Graph</summary>
+    <div style="display: flex; justify-content: flex-end; margin-bottom: 10px;">
+      <select id="chartTimeframe" onchange="fetchHistory()" style="font-size: 12px; padding: 4px 8px;">
+        <option value="1">1 Hour</option>
+        <option value="12">12 Hours</option>
+        <option value="24">24 Hours</option>
+        <option value="168">1 Week</option>
+        <option value="720">1 Month</option>
+      </select>
+    </div>
     <canvas id="historyChart" height="100"></canvas>
   </details>
   <table id="tbl">
@@ -673,7 +682,9 @@
     let historyChart = null;
     async function fetchHistory() {
       try {
-        const res = await fetch('/api/history?hours=1');
+        const tf = document.getElementById('chartTimeframe');
+        const hours = tf ? tf.value : '1';
+        const res = await fetch(`/api/history?hours=${hours}`);
         const j = await res.json();
         if(j.ok && j.history) {
            renderChart(j.history);
@@ -685,7 +696,13 @@
     
     function renderChart(historyData) {
       const ctx = document.getElementById('historyChart').getContext('2d');
-      const labels = historyData.map(d => new Date(d.ts * 1000).toLocaleTimeString());
+      const tf = document.getElementById('chartTimeframe');
+      const hours = tf ? parseInt(tf.value) : 1;
+      const labels = historyData.map(d => {
+        const date = new Date(d.ts * 1000);
+        if (hours <= 24) return date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        return date.toLocaleDateString([], {month: 'short', day: 'numeric'}) + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+      });
       const hddData = historyData.map(d => d.hdd_avg);
       const ssdData = historyData.map(d => d.ssd_avg);
       const pwmData = historyData.map(d => d.pwm);
