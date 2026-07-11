@@ -743,7 +743,7 @@
     async function logsTick(){
       try{
         const r = await fetch(`/api/logs?since=${logsSince}&min_level=DEBUG&limit=400`, { cache:'no-store' });
-        const j = sseData || await (await fetch('/api/status')).json();
+        const j = await r.json();
         if (j && j.items && j.items.length){
           logsAppend(j.items);
           logsSince = j.last_id || logsSince;
@@ -763,7 +763,7 @@
       if (!el) return;
       try {
         const r = await fetch('/api/serial/status', { cache: 'no-store' });
-        const j = sseData || await (await fetch('/api/status')).json();
+        const j = await r.json();
         if (j.connected) {
           el.textContent = 'serial: connected';
           el.title = (j.preferred ? `Using ${j.preferred}` : (j.ports && j.ports[0] ? `Using ${j.ports[0]}` : 'connected'));
@@ -807,7 +807,7 @@
       }catch(e){}
       try {
         const r = await fetch('/api/rp/status', { cache: 'no-store' });
-        const j = sseData || await (await fetch('/api/status')).json();
+        const j = await r.json();
         if (priv){
           priv.textContent = 'privileged: ' + (j.privileged ? 'yes' : 'no');
           priv.className = 'pill small ' + (j.privileged ? 'ok' : 'warn');
