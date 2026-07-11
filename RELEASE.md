@@ -1,6 +1,11 @@
-Version: 1.1.4
+Version: 1.1.5
 
 # Changelog
+
+## 1.1.5 — 2026-07-11
+
+Fixes
+- Fixed a javascript `ReferenceError` in the WebUI where polling functions attempted to access an undefined `sseData` variable, causing the top bar to incorrectly display a "serial error" even when the serial connection was healthy.
 
 ## 1.1.4 — 2026-07-11
 
