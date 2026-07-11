@@ -11,7 +11,7 @@ static mbed::PwmOut* fanPwm = nullptr;
 
 // --------------------------------------------------------------------------------------
 // Firmware info
-static const char* FW_VERSION = "2.1.0";
+static const char* FW_VERSION = "2.2.0";
 
 // User-adjustable settings
 // - GATE_PIN: RP2040 GPIO that drives the 2N3904 base via ~1k resistor
@@ -107,20 +107,22 @@ static void printUptime() {
 }
 
 static void printStatus() {
-  Serial.print(F("fw: ")); Serial.println(FW_VERSION);
-  printUptime();
-  Serial.print(F("setpoint_percent: ")); Serial.print(userPct); Serial.println('%');
-
-  // Convert applied raw back to a 0..100 open-collector duty for reference
   float dutyPct = ((float)PWM_RANGE - (float)currentRaw) * 100.0f / (float)PWM_RANGE;
   if (dutyPct < 0.0f) dutyPct = 0.0f;
   if (dutyPct > 100.0f) dutyPct = 100.0f;
 
-  Serial.print(F("applied_pwm_raw: "));     Serial.println(currentRaw);
-  Serial.print(F("applied_pwm_percent: ")); Serial.println(dutyPct, 1);
-  Serial.print(F("pwm_freq_hz: "));         Serial.println(PWM_FREQ_HZ);
-  Serial.print(F("pwm_range: "));           Serial.println(PWM_RANGE);
-  Serial.print(F("gate_pin: "));            Serial.println(GATE_PIN);
+  float vsys_v = analogRead(29) * 3.3f / 4095.0f * 3.0f;
+
+  Serial.print(F("{\"fw\":\"")); Serial.print(FW_VERSION);
+  Serial.print(F("\",\"uptime_ms\":")); Serial.print(millis());
+  Serial.print(F(",\"setpoint_pct\":")); Serial.print(userPct);
+  Serial.print(F(",\"applied_pwm_raw\":")); Serial.print(currentRaw);
+  Serial.print(F(",\"applied_pwm_pct\":")); Serial.print(dutyPct, 1);
+  Serial.print(F(",\"pwm_freq_hz\":")); Serial.print(PWM_FREQ_HZ);
+  Serial.print(F(",\"pwm_range\":")); Serial.print(PWM_RANGE);
+  Serial.print(F(",\"gate_pin\":")); Serial.print(GATE_PIN);
+  Serial.print(F(",\"vsys_v\":")); Serial.print(vsys_v, 2);
+  Serial.println(F("}"));
 }
 
 static void rebootToBootsel() {
@@ -189,6 +191,7 @@ void setup() {
   while (!Serial && (millis() - t0 < 2000)) { /* allow up to ~2s CDC attach */ }
 
   setupPwm();
+  analogReadResolution(12);
 
   if (DO_SPINUP && START_PERCENT > 0) {
     setFanPercent(100, true);

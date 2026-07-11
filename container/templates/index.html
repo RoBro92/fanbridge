@@ -1806,7 +1806,16 @@ function applyValidation(){
       const j = await r.json().catch(()=>({}));
       if (!r.ok || j.ok === false) throw new Error(j.error || r.statusText || 'send failed');
       if (j.echo) scAppend('in',  j.echo);
-      if (j.reply) scAppend('out', j.reply);
+      if (j.reply) {
+        try {
+          const parsed = JSON.parse(j.reply);
+          for (const [k, v] of Object.entries(parsed)) {
+            scAppend('out', k + ': ' + v);
+          }
+        } catch(e) {
+          scAppend('out', j.reply);
+        }
+      }
       showToast('Command sent', 'ok');
     } catch(e){ scAppend('err', 'SEND ERROR: '+e.message); showToast('Serial send failed', 'error'); }
   }

@@ -1023,6 +1023,13 @@ def api_rp_flash():
             logstep("controller not connected", ok=False)
             return jsonify({"ok": False, "error": "controller not connected", "progress": steps}), 400
 
+        if _in_docker():
+            import glob
+            if not glob.glob("/dev/sd*") and not glob.glob("/dev/loop*"):
+                msg = "Missing host /dev mapping. Please map /dev to /dev in your container template."
+                logstep(msg, ok=False)
+                return jsonify({"ok": False, "error": msg, "progress": steps}), 400
+
         c = load_config()
         rp_cfg = c.get("rp", {}) if isinstance(c, dict) else {}
         repo_url = rp_cfg.get("repo_url") or DEFAULT_CONFIG["rp"]["repo_url"]
@@ -1176,6 +1183,13 @@ def api_rp_flash_upload():
         if 'file' not in request.files:
             logstep("no file uploaded", ok=False)
             return jsonify({"ok": False, "error": "no file uploaded", "progress": steps}), 400
+
+        if _in_docker():
+            import glob
+            if not glob.glob("/dev/sd*") and not glob.glob("/dev/loop*"):
+                msg = "Missing host /dev mapping. Please map /dev to /dev in your container template."
+                logstep(msg, ok=False)
+                return jsonify({"ok": False, "error": msg, "progress": steps}), 400
         uf2_file = request.files['file']
         if not uf2_file.filename:
             logstep("empty filename", ok=False)
