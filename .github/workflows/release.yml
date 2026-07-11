@@ -16,7 +16,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Determine ref
+      - name: Determine ref and version
         id: ref
         run: |
           REF_NAME="${GITHUB_REF_NAME}"
@@ -24,6 +24,7 @@ jobs:
             REF_NAME="${{ inputs.tag }}"
           fi
           echo "REF_NAME=${REF_NAME}" >> $GITHUB_ENV
+          echo "VER_NO_V=${REF_NAME#v}" >> $GITHUB_ENV
 
       - name: Checkout repo at tag
         uses: actions/checkout@v4
@@ -35,17 +36,30 @@ jobs:
         id: notes
         shell: bash
         run: |
-          VER_NO_V="${REF_NAME#v}"
-          awk -v ver="$VER_NO_V" '
+          awk -v ver="${{ env.VER_NO_V }}" '
             $0 ~ "^##[[:space:]]*" ver "( |$)" {flag=1; next}
             flag && /^##[[:space:]]*[0-9]/ {flag=0}
             flag {print}
           ' RELEASE.md > RELEASE_SECTION.md || true
           if [ ! -s RELEASE_SECTION.md ]; then
-            echo "Could not find notes for version ${VER_NO_V} in RELEASE.md; using fallback body." >&2
-            echo "Release ${REF_NAME}" > RELEASE_SECTION.md
+            echo "Could not find notes for version ${{ env.VER_NO_V }} in RELEASE.md; using fallback body." >&2
+            echo "Release ${{ env.REF_NAME }}" > RELEASE_SECTION.md
           fi
           echo "BODY_FILE=RELEASE_SECTION.md" >> $GITHUB_OUTPUT
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build RP2040 Firmware
+        run: |
+          cd firmware/rp2040
+          pio run
+          cp .pio/build/pico/firmware.uf2 ../../fanbridge-rp2040-${{ env.VER_NO_V }}.uf2
 
       - name: Create/Update GitHub Release
         uses: softprops/action-gh-release@v2
@@ -55,4 +69,6 @@ jobs:
           body_path: ${{ steps.notes.outputs.BODY_FILE }}
           draft: false
           prerelease: false
+          files: |
+            fanbridge-rp2040-${{ env.VER_NO_V }}.uf2
 
