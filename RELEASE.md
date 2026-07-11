@@ -1,6 +1,10 @@
-Version: 1.2.0
+Version: 1.2.1
 
 # Changelog
+
+## 1.2.1 — 2026-07-12
+- Split firmware and app release pipelines
+- Fixed default manifest URL for monorepo structure
 
 ## 1.2.0 — 2026-07-11
 

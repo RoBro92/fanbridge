@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.2.1
+
+- Bumped template version to `1.2.1`.
+
 ## v1.2.0
 
 - Set working defaults that match a known Unraid setup:
