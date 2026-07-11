@@ -19,3 +19,4 @@ container/users.local.yml
 docker-compose.override.yml
 .env
 venv/
+.pio-venv/
