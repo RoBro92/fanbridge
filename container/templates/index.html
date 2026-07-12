@@ -754,10 +754,10 @@
     function renderChart(historyData) {
       window.lastHistoryData = historyData;
       const ctx = document.getElementById('historyChart').getContext('2d');
-      const labels = historyData.map(h => h.time);
+      const labels = historyData.map(h => new Date(h.ts * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}));
       const hddData = historyData.map(h => h.hdd_avg);
       const ssdData = historyData.map(h => h.ssd_avg);
-      const pwmData = historyData.map(h => h.pwm_pct);
+      const pwmData = historyData.map(h => h.pwm);
       
       const style = getComputedStyle(document.documentElement);
       const fgColor = style.getPropertyValue('--fg').trim() || '#666';
