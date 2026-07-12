@@ -10,7 +10,7 @@ Version: 1.2.3
 - Enhanced firmware STATUS parser to beautifully format new JSON diagnostics.
 
 ## 1.2.1 — 2026-07-12
-- Split firmware and app release pipelines
+- Split fanbridge-link and app release pipelines
 - Fixed default manifest URL for monorepo structure
 
 ## 1.2.0 — 2026-07-11
@@ -24,7 +24,7 @@ Features
 Infrastructure
 - Added `util-linux` and `usbutils` packages to the Docker image for mount/umount and USB debugging support.
 - Added optional `/dev/bus/usb` and `/dev/disk/by-label` mappings to the Unraid Docker template (advanced settings).
-- Updated `firmware/README.md` with complete host-side update commands and troubleshooting guide.
+- Updated `fanbridge-link/README.md` with complete host-side update commands and troubleshooting guide.
 - Updated privilege pill tooltips to explain firmware update implications.
 
 ## 1.1.6 — 2026-07-11

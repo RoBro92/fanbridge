@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to create/update firmware release for (e.g., fw-v2.0.0)'
+        description: 'Tag to create/update fanbridge-link release for (e.g., fw-v2.0.0)'
         required: true
         default: ''
 
@@ -45,7 +45,7 @@ jobs:
 
       - name: Build RP2040 Firmware
         run: |
-          cd firmware/rp2040
+          cd fanbridge-link/rp2040
           pio run
           cp .pio/build/pico/firmware.uf2 ../../fanbridge-rp2040-${{ env.VER_NO_V }}.uf2
 

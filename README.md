@@ -42,7 +42,7 @@ FanBridge is a Dockerised Unraid service designed to monitor hard drive temperat
 
 FanBridge relies on the **FanBridge Link** hardware controller. A custom-designed PCB is currently in development to provide a streamlined, plug-and-play experience. 
 
-For information on the FanBridge Link controller hardware setup and firmware, see the [firmware directory](firmware/README.md).
+For information on the FanBridge Link controller hardware setup and firmware, see the [fanbridge-link directory](fanbridge-link/README.md).
 
 ## Installation
 
@@ -70,7 +70,7 @@ To use the firmware update feature from the FanBridge web UI, the container requ
 | **USB Bus** | `/dev/bus/usb` → `/dev/bus/usb` (rw) | Allows the container to see the RP2040 after it changes USB identity during BOOTSEL. |
 | **Disk by-label** | `/dev/disk/by-label` → `/dev/disk/by-label` (ro) | Helps the container locate the RPI-RP2 boot volume by label. |
 
-If you prefer not to run privileged, you can update firmware from the Unraid terminal instead — see the [firmware update guide](firmware/README.md).
+If you prefer not to run privileged, you can update firmware from the Unraid terminal instead — see the [firmware update guide](fanbridge-link/README.md).
 
 ### Production Tips
 
@@ -86,7 +86,7 @@ If you prefer not to run privileged, you can update firmware from the Unraid ter
 | **In-App** (Serial → Link Updates) | Yes | Flash from the web UI — either from the configured repo or by uploading a `.uf2` file. |
 | **Unraid Terminal** | No | Run commands directly on the Unraid host via SSH or the web terminal. |
 
-For full instructions on both methods, see the [firmware update guide](firmware/README.md).
+For full instructions on both methods, see the [firmware update guide](fanbridge-link/README.md).
 
 ## Roadmap
 
@@ -103,7 +103,7 @@ For full instructions on both methods, see the [firmware update guide](firmware/
 - `container/api/`: Route groups (blueprints) for serial, app info, and logs.
 - `container/services/`: Core services for parsing `disks.ini` and serial discovery.
 - `container/core/`: Infrastructure utilities for logging and metrics.
-- `firmware/`: RP2040 FanBridge Link firmware source.
+- `fanbridge-link/`: FanBridge Link firmware source (e.g., RP2040).
 - `unraid-templates/`: Unraid Docker templates.
 
 ## Changelog
