@@ -1062,7 +1062,7 @@ function applyValidation(){
       try {
         // extend timeout to tolerate slower disks.ini reads / network hiccups
         // const r = await fetchWithTimeout('/api/status', { cache: 'no-store' }, Math.max(10000, Math.min(25000, (pollSeconds || 7) * 2000)));
-        const j = sseData || await (await fetch('/api/status')).json();
+        const j = sseData || await (await fetch('/api/status', { cache: 'no-store' })).json();
 
         const VERSION_FALLBACK = document.body.dataset.version || '—';
         const verEl = document.getElementById('ver');
