@@ -9,7 +9,7 @@ _CACHE = { 'ts': 0.0, 'latest': None }
 
 @bp.get("/app/version")
 def api_app_version():
-    repo = os.environ.get("FANBRIDGE_REPO", "RoBro92/fanbridge")
+    repo = os.environ.get("FANBRIDGE_REPO", "RoBroLabs/fanbridge")
     now = time.time()
     latest = None
     try:

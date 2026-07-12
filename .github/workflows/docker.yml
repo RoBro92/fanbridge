@@ -45,7 +45,7 @@ jobs:
           push: true
           no-cache: true
           tags: |
-            ghcr.io/robro92/fanbridge:latest
-            ghcr.io/robro92/fanbridge:${{ github.sha }}
-            ${{ steps.vars.outputs.ref_name && format('ghcr.io/robro92/fanbridge:{0}', steps.vars.outputs.ref_name) || '' }}
-            ${{ steps.vars.outputs.version && format('ghcr.io/robro92/fanbridge:{0}', steps.vars.outputs.version) || '' }}
+            ghcr.io/robrolabs/fanbridge:latest
+            ghcr.io/robrolabs/fanbridge:${{ github.sha }}
+            ${{ steps.vars.outputs.ref_name && format('ghcr.io/robrolabs/fanbridge:{0}', steps.vars.outputs.ref_name) || '' }}
+            ${{ steps.vars.outputs.version && format('ghcr.io/robrolabs/fanbridge:{0}', steps.vars.outputs.version) || '' }}
