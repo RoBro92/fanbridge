@@ -45,17 +45,26 @@
     }
     /* Theme variables */
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }
-    /* Light theme (softer greys instead of pure white) */
+    /* Light theme (light grey background with high contrast text) */
     :root {
-      --bg:#f3f4f6;        /* light grey background */
-      --fg:#111827;        /* near-black text */
-      --muted:#6b7280;     /* muted grey text */
-      --border:#d1d5db;    /* softer border */
-      --thbg:#eef2f7;      /* table header */
-      --pillbg:#eef2f7;    /* pill/button background */
-      --cardbg:#f8fafc;    /* card/panel background */
+      --bg:#f8fafc;        /* light grey background */
+      --fg:#0f172a;        /* dark slate text */
+      --muted:#475569;     /* muted text, legible */
+      --border:#cbd5e1;    /* visible border */
+      --thbg:#e2e8f0;      /* table header */
+      --pillbg:#e2e8f0;    /* pill/button background */
+      --cardbg:#ffffff;    /* card/panel background */
     }
-    body.dark { --bg:#0f172a; --fg:#e5e7eb; --muted:#94a3b8; --border:#334155; --thbg:#111827; --pillbg:#1f2937; --cardbg:#0b1220; }
+    /* Dark theme (bluey/purple theme) */
+    body.dark { 
+      --bg:#1e1b4b;        /* deep indigo/purple background */
+      --fg:#e0e7ff;        /* light blue text */
+      --muted:#a5b4fc;     /* readable muted text */
+      --border:#4338ca;    /* indigo border */
+      --thbg:#312e81;      /* table header */
+      --pillbg:#3730a3;    /* pill/button background */
+      --cardbg:#2e1065;    /* card/panel background */
+    }
     body { background: var(--bg); color: var(--fg); }
     .muted { color: var(--muted); }
     table, th, td { border-color: var(--border); }
