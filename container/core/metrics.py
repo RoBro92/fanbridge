@@ -12,7 +12,6 @@ SERIAL_OPEN_FAIL = 0   # type: int
 
 def m_inc_http(method: str, code: int) -> None:
     key = (str(method).upper(), int(code))
-    global HTTP
     if _LOCK:
         with _LOCK:
             HTTP[key] = HTTP.get(key, 0) + 1
@@ -22,7 +21,6 @@ def m_inc_http(method: str, code: int) -> None:
 
 def m_inc_serial_cmd(kind: str, status: str) -> None:
     key = (str(kind), str(status))
-    global SERIAL_CMD
     if _LOCK:
         with _LOCK:
             SERIAL_CMD[key] = SERIAL_CMD.get(key, 0) + 1

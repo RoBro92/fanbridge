@@ -19,7 +19,7 @@ def map_temp_to_pwm(temp: int, thresholds: list[int], pwms: list[int]) -> int:
     return int(pwms[step])
 
 def compute_status(app_context: dict) -> dict:
-    global _AUTO_LAST_DUTY, _AUTO_LAST_TS, _AUTO_PAUSED_MSG
+    global _AUTO_LAST_DUTY, _AUTO_LAST_TS
 
     # Unpack context
     cfg = app_context['cfg']
