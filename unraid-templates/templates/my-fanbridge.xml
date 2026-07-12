@@ -5,15 +5,18 @@
   FanBridge – bridge Unraid drive temperatures to an external microcontroller (RP2040) over USB serial to control PWM fans.
   
   Defaults match a known‑working Unraid setup: port 8080, appdata at /mnt/maincache/appdata/fanbridge, the Unraid emhttp directory mounted read‑only at /unraid, and a serial TTY at /dev/ttyACM0. Only these basics are included for now to avoid confusion.]]></Overview>
-  <Category>System:Utilities</Category>
+  <Category>Utilities: System:Tools</Category>
   <Registry>https://github.com/RoBroLabs/fanbridge/pkgs/container/fanbridge</Registry>
   <Repository>ghcr.io/robrolabs/fanbridge:latest</Repository>
   <WebUI>http://[IP]:[PORT:8080]/</WebUI>
   <Network>bridge</Network>
   <Privileged>false</Privileged>
   <Icon>https://raw.githubusercontent.com/RoBroLabs/fanbridge/main/container/static/fanbridge.png</Icon>
+  <Project>https://github.com/RoBroLabs/fanbridge</Project>
+  <ReadMe>https://github.com/RoBroLabs/fanbridge#readme</ReadMe>
   <Support>https://forums.unraid.net/topic/193488-fanbridge-docker-support/</Support>
   <DonateText>Support FanBridge Development</DonateText>
+  <DonateLink>https://ko-fi.com/robrolabs</DonateLink>
   <ExtraParams>
     --label net.unraid.docker.managed=dockerman
     --label net.unraid.docker.webui='http://[IP]:[PORT:8080]/'
