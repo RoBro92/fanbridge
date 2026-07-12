@@ -11,7 +11,7 @@
       "board": "rp2040",
       "version": "1.0.0",
       "url": "https://github.com/RoBroLabs/fanbridge/releases/download/v1.0.0/fanbridge-rp2040-1.0.0.uf2",
-      "notes": "Built from firmware/rp2040/FanBridge_Link via CI",
+      "notes": "Built from fanbridge-link/rp2040/FanBridge_Link via CI",
       "flash_method": "rp2040_uf2"
     }
   ]
