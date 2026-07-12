@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.2.3
+
+- Bumped template version to `1.2.3`.
+
 ## v1.2.1
 
 - Bumped template version to `1.2.1`.

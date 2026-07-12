@@ -39,5 +39,5 @@
   <Config Name="USB Bus (for FW updates)" Target="/dev/bus/usb" Default="/dev/bus/usb" Type="Path" Mode="rw" Description="Required for RP2040 firmware updates. The controller changes USB identity during BOOTSEL; this mapping lets the container detect it." Display="advanced" Required="false" Mask="false"/>
   <Config Name="Disk by-label (for FW updates)" Target="/dev/disk/by-label" Default="/dev/disk/by-label" Type="Path" Mode="ro" Description="Helps the container locate the RPI-RP2 boot volume by label during firmware updates." Display="advanced" Required="false" Mask="false"/>
 
-  <Version>1.2.1</Version>
+  <Version>1.2.3</Version>
 </Application>

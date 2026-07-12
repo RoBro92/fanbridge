@@ -1,6 +1,9 @@
-Version: 1.2.2
+Version: 1.2.3
 
 # Changelog
+
+## 1.2.3 — 2026-07-12
+- Overhauled light and dark mode aesthetic, updating the dark theme to a high-contrast deep blue/purple and light theme to a soft grey.
 
 ## 1.2.2 — 2026-07-12
 - Added safeguard to prevent UI hangs during firmware updates without proper Docker `/dev` mapping.
