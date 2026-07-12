@@ -88,15 +88,6 @@ If you prefer not to run privileged, you can update firmware from the Unraid ter
 
 For full instructions on both methods, see the [firmware update guide](fanbridge-link/README.md).
 
-## Roadmap
-
-| Category | Planned Feature | Status |
-|---|---|---|
-| **Hardware** | Custom PCB release for FanBridge Link | In Progress |
-| **UI/UX** | Historical charts and richer dashboards | Planned |
-| **UI/UX** | Live updates via WebSocket/SSE for smoother refresh | Planned |
-| **Controller** | Read RPM data from fan tachometer | Planned |
-
 ## Architecture
 
 - `container/app.py`: Flask app entry, app factory, middleware.
