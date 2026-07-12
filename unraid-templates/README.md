@@ -25,8 +25,7 @@ The container is configured out-of-the-box with minimal, functional defaults. Yo
 ## Important Links
 
 - **Support Thread:** [Unraid Forums](https://forums.unraid.net/topic/193488-fanbridge-docker-support/)
-- **Docker Image:** [`ghcr.io/robro92/fanbridge:latest`](https://github.com/RoBro92/fanbridge/pkgs/container/fanbridge)
-- **Donate:** [Support Development on Ko-fi](https://ko-fi.com/robro92)
+- **Docker Image:** [`ghcr.io/robrolabs/fanbridge:latest`](https://github.com/RoBroLabs/fanbridge/pkgs/container/fanbridge)
 
 ## License
 

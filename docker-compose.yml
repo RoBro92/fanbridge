@@ -6,7 +6,7 @@ services:
     build:
       context: .
       dockerfile: container/Dockerfile
-    image: ghcr.io/robro92/fanbridge:latest
+    image: ghcr.io/robrolabs/fanbridge:latest
     environment:
       - TZ=Europe/London
     ports:

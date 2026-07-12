@@ -6,18 +6,18 @@
   
   Defaults match a known‑working Unraid setup: port 8080, appdata at /mnt/maincache/appdata/fanbridge, the Unraid emhttp directory mounted read‑only at /unraid, and a serial TTY at /dev/ttyACM0. Only these basics are included for now to avoid confusion.]]></Overview>
   <Category>System:Utilities</Category>
-  <Registry>https://github.com/RoBro92/fanbridge/pkgs/container/fanbridge</Registry>
-  <Repository>ghcr.io/robro92/fanbridge:latest</Repository>
+  <Registry>https://github.com/RoBroLabs/fanbridge/pkgs/container/fanbridge</Registry>
+  <Repository>ghcr.io/robrolabs/fanbridge:latest</Repository>
   <WebUI>http://[IP]:[PORT:8080]/</WebUI>
   <Network>bridge</Network>
   <Privileged>false</Privileged>
-  <Icon>https://raw.githubusercontent.com/RoBro92/fanbridge-unraid-templates/master/icons/fanbridge.png</Icon>
+  <Icon>https://raw.githubusercontent.com/RoBroLabs/fanbridge/main/container/static/fanbridge.png</Icon>
   <Support>https://forums.unraid.net/topic/193488-fanbridge-docker-support/</Support>
-  <DonateLink>https://ko-fi.com/robro92</DonateLink>
+  <DonateText>Support FanBridge Development</DonateText>
   <ExtraParams>
     --label net.unraid.docker.managed=dockerman
     --label net.unraid.docker.webui='http://[IP]:[PORT:8080]/'
-    --label net.unraid.docker.icon='https://raw.githubusercontent.com/RoBro92/fanbridge-unraid-templates/master/icons/fanbridge.png'
+    --label net.unraid.docker.icon='https://raw.githubusercontent.com/RoBroLabs/fanbridge/main/container/static/fanbridge.png'
   </ExtraParams>
 
   <!-- Ports -->

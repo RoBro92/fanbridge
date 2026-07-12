@@ -9,7 +9,7 @@ WORKDIR /app
 
 LABEL org.opencontainers.image.title="fanbridge" \
       org.opencontainers.image.description="FanBridge – Unraid drive temp → PWM fan control bridge" \
-      org.opencontainers.image.source="https://github.com/RoBro92/fanbridge" \
+      org.opencontainers.image.source="https://github.com/RoBroLabs/fanbridge" \
       org.opencontainers.image.licenses="MIT"
 
 COPY container/requirements.txt ./requirements.txt

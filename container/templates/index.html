@@ -38,34 +38,97 @@
     .tab:hover {
       background: var(--pillbg);
     }
-    :root { --accent:#ff7a1a; }
-    body.dark { --accent:#ffb26b; }
-    .tab--active {
-      border-bottom-color: var(--accent);
-    }
     /* Theme variables */
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }
-    /* Light theme (light grey background with high contrast text) */
-    :root {
-      --bg:#f8fafc;        /* light grey background */
-      --fg:#0f172a;        /* dark slate text */
-      --muted:#475569;     /* muted text, legible */
-      --border:#cbd5e1;    /* visible border */
-      --thbg:#e2e8f0;      /* table header */
-      --pillbg:#e2e8f0;    /* pill/button background */
-      --cardbg:#ffffff;    /* card/panel background */
+    :root, html {
+      background-color: var(--bg);
+      /* Warm light grey (Orange Theme) */
+      --bg: #fffbf8;       
+      --fg: #1c1917;       
+      --muted: #57534e;    
+      --border: #d6d3d1;   
+      --thbg: #f5f5f4;     
+      --pillbg: #f5f5f4;   
+      --cardbg: #ffffff;   
+      
+      /* Default Accent (Orange) */
+      --accent: #f97316;
     }
-    /* Dark theme (bluey/purple theme) */
-    body.dark { 
-      --bg:#1e1b4b;        /* deep indigo/purple background */
-      --fg:#e0e7ff;        /* light blue text */
-      --muted:#a5b4fc;     /* readable muted text */
-      --border:#4338ca;    /* indigo border */
-      --thbg:#312e81;      /* table header */
-      --pillbg:#3730a3;    /* pill/button background */
-      --cardbg:#2e1065;    /* card/panel background */
+
+    html.dark { 
+      /* Warm dark grey (Orange Theme) */
+      --bg: #1c1917;       
+      --fg: #fafaf9;       
+      --muted: #a8a29e;    
+      --border: #44403c;   
+      --thbg: #292524;     
+      --pillbg: #292524;   
+      --cardbg: #0c0a09;   
+      
+      --accent: #fb923c;
     }
-    body { background: var(--bg); color: var(--fg); }
+    
+    /* Color Themes (Full Palette Overrides, scoped to .theme-container) */
+    
+    /* PURPLE */
+    html.theme-purple .theme-container {
+      --bg: #faf5ff; --fg: #0f172a; --muted: #475569;
+      --border: #e9d5ff; --thbg: #f3e8ff; --pillbg: #f3e8ff; --cardbg: #ffffff;
+      --accent: #a855f7;
+    }
+    html.theme-purple.dark .theme-container {
+      --bg: #2e1065; --fg: #f8fafc; --muted: #cbd5e1;
+      --border: #581c87; --thbg: #3b0764; --pillbg: #3b0764; --cardbg: #1e1b4b;
+      --accent: #c084fc;
+    }
+
+    /* RED */
+    html.theme-red .theme-container {
+      --bg: #fef2f2; --fg: #0f172a; --muted: #475569;
+      --border: #fecaca; --thbg: #fee2e2; --pillbg: #fee2e2; --cardbg: #ffffff;
+      --accent: #ef4444;
+    }
+    html.theme-red.dark .theme-container {
+      --bg: #450a0a; --fg: #f8fafc; --muted: #cbd5e1;
+      --border: #7f1d1d; --thbg: #7f1d1d; --pillbg: #7f1d1d; --cardbg: #3b0a0a;
+      --accent: #f87171;
+    }
+
+    /* GREEN */
+    html.theme-green .theme-container {
+      --bg: #f0fdf4; --fg: #0f172a; --muted: #475569;
+      --border: #bbf7d0; --thbg: #dcfce7; --pillbg: #dcfce7; --cardbg: #ffffff;
+      --accent: #22c55e;
+    }
+    html.theme-green.dark .theme-container {
+      --bg: #052e16; --fg: #f8fafc; --muted: #cbd5e1;
+      --border: #14532d; --thbg: #14532d; --pillbg: #14532d; --cardbg: #022c22;
+      --accent: #4ade80;
+    }
+
+    /* BLUE */
+    html.theme-blue .theme-container {
+      --bg: #eff6ff; --fg: #0f172a; --muted: #475569;
+      --border: #bfdbfe; --thbg: #dbeafe; --pillbg: #dbeafe; --cardbg: #ffffff;
+      --accent: #3b82f6;
+    }
+    html.theme-blue.dark .theme-container {
+      --bg: #172554; --fg: #f8fafc; --muted: #cbd5e1;
+      --border: #1e3a8a; --thbg: #1e3a8a; --pillbg: #1e3a8a; --cardbg: #0f172a;
+      --accent: #60a5fa;
+    }
+
+    .theme-container {
+      background: var(--bg);
+      color: var(--fg);
+      padding: 20px;
+      border-radius: 12px;
+      margin-top: 16px;
+      border: 1px solid var(--border);
+      box-shadow: 0 4px 14px rgba(0,0,0,0.05);
+    }
+
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; min-height: 100vh; background: var(--bg); color: var(--fg); }
+    .tab--active { border-bottom-color: var(--accent); }
     .muted { color: var(--muted); }
     table, th, td { border-color: var(--border); }
     th { background: var(--thbg); }
@@ -115,10 +178,6 @@
     }
     .site-logo { width: 100px; height: 100px; opacity: .95; object-fit: contain; margin-right: 12px; margin-left: 0; }
     .brand { font-size: 50px; }
-    /* Floating Ko‑fi button (bottom-right) */
-    #openModalBtn { position: fixed; right: 16px; bottom: 16px; z-index: 3000; display:block; cursor: pointer; background: transparent; border: none; padding: 0; }
-    #openModalBtn img { height: 36px; width: auto; border:0; box-shadow: 0 6px 20px rgba(0,0,0,.25); border-radius: 6px; display:block; }
-    #openModalBtn .label { display: none; }
     /* Generic modal styles */
     .modal { display: none; position: fixed; z-index: 3100; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background: rgba(0,0,0,.6); }
     /* Narrower modal to better fit Ko‑fi widget */
@@ -231,26 +290,8 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
-    /* Premium dark mode glassmorphism */
-    :root {
-      --bg: #0f172a;
-      --fg: #e2e8f0;
-      --cardbg: rgba(30, 41, 59, 0.7);
-      --pillbg: rgba(51, 65, 85, 0.5);
-      --border: rgba(255, 255, 255, 0.1);
-      --accent: #38bdf8;
-      --thbg: rgba(30, 41, 59, 0.9);
-    }
-    body {
-      background: linear-gradient(135deg, #0f172a, #1e1b4b);
-      color: var(--fg);
-      font-family: 'Inter', system-ui, sans-serif;
-    }
     .panel, .serial-box, .card, .modal-content {
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
-      border: 1px solid rgba(255, 255, 255, 0.18);
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
     }
     .pill, button {
       transition: all 0.2s ease-in-out;
@@ -276,6 +317,7 @@
     <h1 class="brand">FanBridge for Unraid</h1>
   </div>
 
+<div class="theme-container">
   <div class="meta flex">
     <span id="ver"   class="pill">version: {{ version or "—" }}</span>
     <span id="serialpill" class="pill" title="USB serial connection to Arduino / RP2040">serial: …</span>
@@ -285,7 +327,8 @@
     <div class="menu">
       <button id="menuBtn" class="pill" type="button" aria-haspopup="true" aria-expanded="false">Menu ▾</button>
       <div id="menuList" class="menu-list" role="menu" aria-labelledby="menuBtn" style="display:none;">
-        <button id="menuTheme"  class="menu-item" role="menuitem">Theme: …</button>
+        <button id="menuTheme"  class="menu-item" role="menuitem">Mode: …</button>
+        <button id="menuColor"  class="menu-item" role="menuitem">Color: …</button>
         <button id="menuPw"     class="menu-item" role="menuitem">Change password</button>
         <button id="menuLogout" class="menu-item" role="menuitem">Logout</button>
       </div>
@@ -515,13 +558,9 @@
             <p style="margin:6px 0 0; color:var(--muted);">
               In-app firmware updates require a privileged container (or CAP_SYS_ADMIN) so the RP2040 BOOTSEL volume can be mounted.<br/>
               You can update the firmware directly from the Unraid terminal instead.
+               Troubleshooting? <a id="rpHelpLink" href="https://github.com/RoBroLabs/fanbridge/blob/main/firmware/README.md" target="_blank" rel="noopener"
+                 style="color: var(--accent); text-decoration: underline;">See Firmware Guide</a>
             </p>
-            <div style="margin-top:8px;">
-              <a id="rpHelpLink" href="https://github.com/RoBro92/fanbridge/blob/main/firmware/README.md" target="_blank" rel="noopener"
-                 class="pill small" style="text-decoration:none; display:inline-flex; align-items:center; gap:4px;">
-                📖 Update guide
-              </a>
-            </div>
           </div>
         </div>
         <div id="rpWarn" class="warnmsg small" style="display:none;"></div>
@@ -572,36 +611,18 @@
     </div>
   </div>
 
+  </div> <!-- /theme-container -->
+
   <div class="site-footer small">
     <a id="supportLink" href="https://forums.unraid.net/topic/193488-fanbridge-docker-support/" target="_blank" rel="noopener">Support</a>
     &nbsp;|&nbsp;
-    <a href="https://github.com/RoBro92/fanbridge/wiki" target="_blank" rel="noopener">Wiki</a>
+    <a href="https://github.com/RoBroLabs/fanbridge/wiki" target="_blank" rel="noopener">Wiki</a>
     &nbsp;|&nbsp;
-    <a href="https://github.com/RoBro92/fanbridge" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://github.com/RoBroLabs/fanbridge" target="_blank" rel="noopener">GitHub</a>
     &nbsp;|&nbsp;
     <a href="/api/status">API</a>
     &nbsp;|&nbsp;
     <a href="/health">Health</a>
-    &nbsp;|&nbsp;
-    <a href="https://ko-fi.com/robro92" target="_blank" rel="noopener">Donate</a>
-  </div>
-
-  <!-- Floating Ko‑fi button (opens modal) -->
-  <button id="openModalBtn" type="button" aria-label="Support FanBridge on Ko‑fi">
-    <img src="{{ url_for('static', filename='kofi.png') }}" alt="Ko‑fi" />
-    <span class="label">Support Me</span>
-  </button>
-
-  <!-- Modal: Ko‑fi embed (lazy-loaded) -->
-  <div id="kofiModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="kofiTitle">
-    <div class="modal-content">
-      <div class="modal-header">
-        <strong id="kofiTitle" class="small">Support FanBridge</strong>
-        <span class="close" id="kofiClose">&times;</span>
-      </div>
-      <div id="kofiBody" style="min-height:300px;"></div>
-      <div class="modal-footer">Payments are handled securely by Ko‑fi over HTTPS. No card data passes through FanBridge.</div>
-    </div>
   </div>
 
   <!-- Modal: RP Flash Confirm -->
@@ -731,23 +752,44 @@
     }
     
     function renderChart(historyData) {
+      window.lastHistoryData = historyData;
       const ctx = document.getElementById('historyChart').getContext('2d');
-      const tf = document.getElementById('chartTimeframe');
-      const hours = tf ? parseInt(tf.value) : 1;
-      const labels = historyData.map(d => {
-        const date = new Date(d.ts * 1000);
-        if (hours <= 24) return date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-        return date.toLocaleDateString([], {month: 'short', day: 'numeric'}) + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-      });
-      const hddData = historyData.map(d => d.hdd_avg);
-      const ssdData = historyData.map(d => d.ssd_avg);
-      const pwmData = historyData.map(d => d.pwm);
+      const labels = historyData.map(h => h.time);
+      const hddData = historyData.map(h => h.hdd_avg);
+      const ssdData = historyData.map(h => h.ssd_avg);
+      const pwmData = historyData.map(h => h.pwm_pct);
       
+      const style = getComputedStyle(document.documentElement);
+      const fgColor = style.getPropertyValue('--fg').trim() || '#666';
+      const gridColor = style.getPropertyValue('--border').trim() || '#ddd';
+      
+      Chart.defaults.color = fgColor;
+
       if(historyChart) {
          historyChart.data.labels = labels;
          historyChart.data.datasets[0].data = hddData;
          historyChart.data.datasets[1].data = ssdData;
          historyChart.data.datasets[2].data = pwmData;
+         
+         historyChart.options.color = fgColor;
+         if (historyChart.options.scales.x) {
+             historyChart.options.scales.x.grid.color = gridColor;
+             historyChart.options.scales.x.ticks.color = fgColor;
+         }
+         if (historyChart.options.scales.y) {
+             historyChart.options.scales.y.grid.color = gridColor;
+             historyChart.options.scales.y.ticks.color = fgColor;
+             historyChart.options.scales.y.title.color = fgColor;
+         }
+         if (historyChart.options.scales.y1) {
+             historyChart.options.scales.y1.grid.color = gridColor;
+             historyChart.options.scales.y1.ticks.color = fgColor;
+             historyChart.options.scales.y1.title.color = fgColor;
+         }
+         if (!historyChart.options.plugins) historyChart.options.plugins = {};
+         if (!historyChart.options.plugins.legend) historyChart.options.plugins.legend = {};
+         if (!historyChart.options.plugins.legend.labels) historyChart.options.plugins.legend.labels = {};
+         historyChart.options.plugins.legend.labels.color = fgColor;
          historyChart.update();
          return;
       }
@@ -764,10 +806,12 @@
         },
         options: {
           responsive: true,
+          color: fgColor,
           interaction: { mode: 'index', intersect: false },
           scales: {
-            y: { beginAtZero: false, title: { display: true, text: 'Temp °C' } },
-            y1: { beginAtZero: true, max: 100, position: 'right', title: { display: true, text: 'PWM %' } }
+            x: { grid: { color: gridColor }, ticks: { color: fgColor } },
+            y: { beginAtZero: false, title: { display: true, text: 'Temp °C', color: fgColor }, grid: { color: gridColor }, ticks: { color: fgColor } },
+            y1: { beginAtZero: true, max: 100, position: 'right', title: { display: true, text: 'PWM %', color: fgColor }, grid: { color: gridColor }, ticks: { color: fgColor } }
           }
         }
       });
@@ -1275,12 +1319,20 @@ function applyValidation(){
       });
 
       // Theme toggle now lives in menu
-      if (mTheme) mTheme.addEventListener('click', ()=> {
-        const next = document.body.classList.contains('dark') ? 'light' : 'dark';
+      if (mTheme) mTheme.addEventListener('click', (e)=> {
+        e.stopPropagation(); // keep menu open to let user cycle both mode and color
+        const next = document.documentElement.classList.contains('dark') ? 'light' : 'dark';
         applyTheme(next);
-        // Update menu label
-        mTheme.textContent = 'Theme: ' + (next === 'dark' ? 'Dark' : 'Light');
-        closeMenu();
+      });
+
+      const mColor = document.getElementById('menuColor');
+      if (mColor) mColor.addEventListener('click', (e)=> {
+        e.stopPropagation();
+        const colors = ['orange', 'purple', 'red', 'green', 'blue'];
+        let current = localStorage.getItem('fanbridgeColor') || 'orange';
+        let idx = colors.indexOf(current);
+        let next = colors[(idx + 1) % colors.length];
+        applyColor(next);
       });
 
       // Open Change Password modal
@@ -1488,71 +1540,50 @@ function applyValidation(){
       });
     })();
 
-    // Theme toggle (light/dark)
+    // Theme toggle (light/dark) & Colors
     const THEME_KEY = 'fanbridgeTheme';
+    const COLOR_KEY = 'fanbridgeColor';
+
     function applyTheme(t){
       const dark = (t === 'dark');
-      document.body.classList.toggle('dark', dark);
+      document.documentElement.classList.toggle('dark', dark);
       try { localStorage.setItem(THEME_KEY, dark ? 'dark' : 'light'); } catch(e) {}
-      // Update menu item label if present
       const mTheme = document.getElementById('menuTheme');
-      if (mTheme) mTheme.textContent = 'Theme: ' + (dark ? 'Dark' : 'Light');
+      if (mTheme) mTheme.textContent = 'Mode: ' + (dark ? 'Dark' : 'Light');
+      // Force chart redraw to pick up new text colors (deferred to let CSS compute)
+      setTimeout(() => {
+        if (typeof renderChart !== 'undefined' && typeof lastHistoryData !== 'undefined' && lastHistoryData) {
+          renderChart(lastHistoryData);
+        }
+      }, 50);
     }
+
+    function applyColor(c){
+      document.documentElement.classList.remove('theme-orange', 'theme-purple', 'theme-red', 'theme-green', 'theme-blue');
+      if (c !== 'orange') document.documentElement.classList.add('theme-' + c);
+      try { localStorage.setItem(COLOR_KEY, c); } catch(e) {}
+      const mColor = document.getElementById('menuColor');
+      if (mColor) mColor.textContent = 'Color: ' + c.charAt(0).toUpperCase() + c.slice(1);
+      // Force chart redraw to pick up new text colors (deferred to let CSS compute)
+      setTimeout(() => {
+        if (typeof renderChart !== 'undefined' && typeof lastHistoryData !== 'undefined' && lastHistoryData) {
+          renderChart(lastHistoryData);
+        }
+      }, 50);
+    }
+
     (function(){
       let pref = 'light';
+      let cpref = 'orange';
       try {
         pref = localStorage.getItem(THEME_KEY) ||
           (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        cpref = localStorage.getItem(COLOR_KEY) || 'orange';
       } catch(e) {}
       applyTheme(pref);
-      // Update menu item label if present
-      const mTheme = document.getElementById('menuTheme');
-      if (mTheme) mTheme.textContent = 'Theme: ' + (pref === 'dark' ? 'Dark' : 'Light');
+      applyColor(cpref);
     })();
   </script>
-  <script>
-    // Ko‑fi floating button -> open modal with embedded iframe
-    (function(){
-      function ensureIframe(){
-        var host = document.getElementById('kofiBody');
-        if (!host) return;
-        if (host.querySelector('iframe')) return; // already loaded
-        var ifr = document.createElement('iframe');
-        ifr.id = 'kofiframe';
-        ifr.src = 'https://ko-fi.com/robro92/?hidefeed=true&widget=true&embed=true&preview=true';
-        ifr.title = 'robro92';
-        // Match app theme for the iframe element itself (content remains ko-fi themed)
-        ifr.setAttribute('style','border:none;width:100%;padding:0;background:transparent;');
-        ifr.height = '712';
-        host.appendChild(ifr);
-      }
-      function openKofi(ev){
-        if (ev) { try { ev.preventDefault(); } catch(e){} }
-        var modal = document.getElementById('kofiModal');
-        if (!modal) return;
-        ensureIframe();
-        modal.style.display = 'block';
-        setTimeout(function(){ try{ document.getElementById('kofiClose').focus(); }catch(e){} }, 10);
-      }
-      function closeKofi(){ var modal = document.getElementById('kofiModal'); if (modal){ modal.style.display = 'none'; } }
-      // Direct bindings
-      var btn = document.getElementById('openModalBtn');
-      var closeBtn = document.getElementById('kofiClose');
-      if (btn){ btn.addEventListener('click', openKofi); }
-      if (closeBtn){ closeBtn.addEventListener('click', closeKofi); }
-      var modal = document.getElementById('kofiModal');
-      if (modal){ modal.addEventListener('click', function(ev){ if (ev.target === modal) closeKofi(); }); }
-      // Event delegation fallback (covers inner <img> clicks or dynamic replacement)
-      document.addEventListener('click', function(ev){
-        var t = ev.target;
-        if (!t) return;
-        if (t.id === 'openModalBtn' || (t.closest && t.closest('#openModalBtn'))){
-          openKofi(ev);
-        }
-      }, true);
-      // Keyboard: ESC to close
-      document.addEventListener('keydown', function(ev){ if (ev.key === 'Escape') closeKofi(); });
-    })();
   </script>
   <script>
     // Logs download helper

@@ -3,14 +3,14 @@
     {
       "board": "rp2040",
       "version": "2.2.0",
-      "url": "https://github.com/RoBro92/fanbridge/releases/download/fw-v2.2.0/fanbridge-rp2040-2.2.0.uf2",
+      "url": "https://github.com/RoBroLabs/fanbridge/releases/download/fw-v2.2.0/fanbridge-rp2040-2.2.0.uf2",
       "notes": "USB firmware update support via FanBridge UI",
       "flash_method": "rp2040_uf2"
     },
     {
       "board": "rp2040",
       "version": "1.0.0",
-      "url": "https://github.com/RoBro92/fanbridge/releases/download/v1.0.0/fanbridge-rp2040-1.0.0.uf2",
+      "url": "https://github.com/RoBroLabs/fanbridge/releases/download/v1.0.0/fanbridge-rp2040-1.0.0.uf2",
       "notes": "Built from firmware/rp2040/FanBridge_Link via CI",
       "flash_method": "rp2040_uf2"
     }
