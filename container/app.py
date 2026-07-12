@@ -12,6 +12,11 @@ try:
 except Exception:
     load_dotenv = None  
 
+try:
+    import serial.tools.list_ports as list_ports
+except Exception:
+    list_ports = None
+
 _BASE = pathlib.Path(__file__).resolve().parent
 _PROJECT_ROOT = _BASE.parent 
 
