@@ -23,7 +23,7 @@ The FanBridge Link is an ultra-compact, robust fan controller driven by an RP204
 | **Fan Headers** | 6x 4-Pin PWM Fan Headers (Standard 2.54mm pitch) | Connects to 12V, GND, PWM (Output), and TACH (Input). |
 | **Temp Sensor Header** | 1x 3-Pin Header (2.54mm pitch) with 4.7KΩ Pull-up | For an external **DS18B20** Digital Temperature Sensor (Ambient intake temp). |
 | **Audible Alarm** | 1x SMD Piezo Buzzer (Active or Passive, 3.3V) | Physical audible alerts for dead fans or critical temperatures. |
-| **Status LEDs** | 2x System LEDs (Blue, Green), 6x Fan LEDs (Red, 0603 SMD) | System LEDs for USB/Power. Per-Fan Red LEDs for physical diagnostic fault alerts. |
+| **Status LEDs** | 3x System LEDs (Green, Blue, Yellow), 6x Fan LEDs (Red, 0603 SMD) | System LEDs for Power/Firmware status. Per-Fan Red LEDs for physical diagnostic fault alerts. |
 | **Expansion Headers** | 1x 4-Pin I2C (3.3V), 1x 3-Pin ARGB (5V) | I2C for external OLED screens. ARGB for external WS2812B server rack lighting. |
 | **Current Sensor** | INA180, INA219, or INA226 (with Shunt Resistor) | High-side current sensing to detect stalled fan motors or electrical shorts. |
 | **Polyfuse (PTC)** | 12V PTC Resettable Fuse (e.g., 10A hold) | Protects the board from catching fire if a fan cable severely shorts out. |
@@ -66,6 +66,10 @@ To prevent feature creep and minimize analog trace noise, all power telemetry is
 
 ### 3.4 Commercialization & Durability (Final Touches)
 For a premium commercial product that survives the hands of homelab users, the following must be included:
+- **System Status LEDs (x3):** 
+  - **3.3V Logic Power (Green):** Hardwired to the 3.3V rail. Illuminates when the RP2040 is successfully receiving power from the USB LDO.
+  - **12V JBOD Power (Blue):** Hardwired to the 12V rail (use an appropriate resistor to handle 12V). Illuminates when the server PSU is actively feeding the Molex connector.
+  - **Firmware Status (Yellow):** Connected to a spare RP2040 GPIO. The firmware will pulse this LED (e.g., a "heartbeat" fade) to prove the microcontroller hasn't frozen and USB communication with Unraid is active.
 - **Per-Fan Diagnostic LEDs:** Place 6x tiny Red 0603 SMD LEDs physically next to their respective Fan Headers. Route them to 6 spare GPIO pins on the RP2040 (with current limiting resistors). The firmware will illuminate the LED solid RED if it detects a fan stall (PWM is requesting speed, but TACH reads 0 RPM), allowing users to instantly identify the dead fan in a dark chassis.
 - **ESD Protection (TVS Diodes):** Users carry static electricity. Place an ESD TVS Diode Array (e.g., USBLC6-2SC6) on the USB-C Data lines (D+/D-) right at the connector. Ensure the Schottky diodes on the Fan TACH lines are rated to absorb static shocks when users hot-plug fans.
 - **Physical Buttons:** The RP2040 requires a **BOOTSEL** tactile button (to pull the QSPI CS pin low during boot) to flash the initial firmware. A **RESET** tactile button (pulling the RUN pin low) is also highly recommended so users can reboot the microcontroller without unplugging the USB cable.
