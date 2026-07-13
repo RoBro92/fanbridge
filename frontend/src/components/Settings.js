@@ -356,15 +356,52 @@ export async function loadSettings() {
     const res = await api.getStatus(); 
     if (!res || !res.config) return;
 
-    // Toggle global drives empty state
+    // We always want to show the global drives table, even if there are no controllers.
     const drivesTableContainer = document.getElementById('global-drives-table-container');
     const drivesEmptyState = document.getElementById('global-drives-empty-state');
-    if (!res.controllers || res.controllers.length === 0) {
-      if (drivesTableContainer) drivesTableContainer.style.display = 'none';
-      if (drivesEmptyState) drivesEmptyState.style.display = 'block';
-    } else {
-      if (drivesTableContainer) drivesTableContainer.style.display = 'block';
-      if (drivesEmptyState) drivesEmptyState.style.display = 'none';
+    if (drivesTableContainer) drivesTableContainer.style.display = 'block';
+    if (drivesEmptyState) drivesEmptyState.style.display = 'none';
+
+    // Populate the global drives table
+    const drivesTbody = document.querySelector('#global-drives-table-container tbody');
+    if (drivesTbody && res.drives) {
+      if (res.drives.length === 0) {
+        drivesTbody.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 16px; color: var(--color-text-secondary);">No drives detected in disks.ini</td></tr>';
+      } else {
+        const controllers = res.controllers || [];
+        const excludeList = res.exclude_devices || [];
+        
+        let controllerOptions = '<option value="none">Not Included</option>';
+        if (controllers.length === 0) {
+          controllerOptions += '<option value="global" disabled>No Controllers Added</option>';
+        } else {
+          controllers.forEach(c => {
+            controllerOptions += `<option value="${c.id}">${c.name}</option>`;
+          });
+          controllerOptions += '<option value="global">Global Profile</option>';
+        }
+
+        drivesTbody.innerHTML = res.drives.map(d => {
+          const isExcluded = excludeList.includes(d.dev);
+          const isHDD = d.type === 'HDD';
+          const typeColor = isHDD ? '#7dd3fc' : '#d8b4fe';
+          const typeBg = isHDD ? 'hsla(200, 50%, 50%, 0.2)' : 'hsla(280, 50%, 50%, 0.2)';
+          
+          return `
+            <tr style="border-bottom: 1px solid var(--glass-border);">
+              <td style="padding: 10px 12px;">${d.dev}</td>
+              <td style="padding: 10px 12px;"><span style="background: ${typeBg}; color: ${typeColor}; padding: 2px 6px; border-radius: 4px; font-size: 11px;">${d.type}</span></td>
+              <td style="padding: 10px 12px;">${d.state || 'Unknown'}</td>
+              <td style="padding: 10px 12px;">${d.temp !== null ? d.temp + '°C' : '--'}</td>
+              <td style="padding: 10px 12px;">
+                <select class="input-base" style="padding: 4px 8px; font-size: 12px;" data-dev="${d.dev}">
+                  ${controllerOptions.replace('value="none"', isExcluded ? 'value="none" selected' : 'value="none"').replace('value="global"', !isExcluded && controllers.length > 0 ? 'value="global" selected' : 'value="global"')}
+                </select>
+              </td>
+            </tr>
+          `;
+        }).join('');
+      }
     }
 
     const cfg = res.config;
@@ -404,9 +441,18 @@ async function saveSettings() {
   
   try {
     // Read the form
+    const excludes = [];
+    document.querySelectorAll('#global-drives-table-container select').forEach(select => {
+      if (select.value === 'none') {
+        const dev = select.getAttribute('data-dev');
+        if (dev) excludes.push(dev);
+      }
+    });
+
     const settingsPayload = {
       min_interval_s: parseInt(document.getElementById('setting-min-interval').value || 3, 10),
-      hysteresis_percent: parseInt(document.getElementById('setting-hysteresis').value || 2, 10)
+      hysteresis_percent: parseInt(document.getElementById('setting-hysteresis').value || 2, 10),
+      exclude_devices: excludes
     };
 
     const hddCurve = extractCurve('hdd');
