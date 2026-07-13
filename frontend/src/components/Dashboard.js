@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { initDriveTable } from './DriveTable.js';
+import { initDriveTable, updateDriveTable } from './DriveTable.js';
 import { initSerialTools } from './SerialTools.js';
 import { initLogs, initLinkUpdates } from './LogsUpdater.js';
 import { CURVE_PROFILES } from './Settings.js';
@@ -537,6 +537,9 @@ export function updateDashboardData(data, activeControllerId) {
 
   if (emptyState) emptyState.style.display = 'none';
   if (dashTabs) dashTabs.style.display = 'flex';
+  
+  // Update Global Drives
+  updateDriveTable(data);
   
   // Only show the active tab content
   const tabDrivesBtn = document.getElementById('btn-tab-drives');
