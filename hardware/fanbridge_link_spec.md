@@ -69,10 +69,11 @@ For a premium commercial product that survives the hands of homelab users, the f
 - **Physical Buttons:** The RP2040 requires a **BOOTSEL** tactile button (to pull the QSPI CS pin low during boot) to flash the initial firmware. A **RESET** tactile button (pulling the RUN pin low) is also highly recommended so users can reboot the microcontroller without unplugging the USB cable.
 - **Silkscreen Labelling:** The silkscreen must be extremely clear for the end-user. Label all headers ("FAN 1", "FAN 2", "12V MOLEX IN", "USB-C HOST"). Add the project logo/name and a hardware revision number (e.g., `REV 1.0`).
 
-### 3.5 Rev 1.0 Module Strategy (Time-to-Market)
-To minimize initial engineering time and reduce prototype failure risk, **Rev 1.0 of this board will NOT use the raw RP2040 silicon.** 
-- **Requirement:** Design the PCB footprint to accept a pre-built, castellated microcontroller module (e.g., **Raspberry Pi Pico** or **Waveshare RP2040-Zero**) soldered directly as a surface-mount component.
-- This entirely eliminates the need to route the USB impedance, 12MHz crystal, QSPI Flash, and LDO regulator on the FanBridge motherboard. The custom PCB will act purely as a robust carrier board for the high-current 12V Fan power, INA219 telemetry, and TACH/PWM protection logic.
+### 3.5 RP2040 Core Implementation Requirements
+This board will use the raw RP2040 silicon to maximize profit margins and eliminate reliance on third-party carrier modules. Your engineer must include the standard minimal viable RP2040 circuit:
+- **External Flash Memory:** The RP2040 has **zero** internal flash. Include an external QSPI Flash chip (e.g., Winbond W25Q16 2MB, or generic equivalent SOP-8) to store the firmware. *(Note: Using an 'Extended Part' for a $0.15 2MB flash chip with a $3 setup fee is significantly cheaper at volume than using a $2.00 'Basic Part' 16MB chip).*
+- **12MHz Crystal Oscillator:** USB communication requires high precision. You must include an external 12MHz crystal (e.g., SMD3225-4P, ±10ppm) and its associated load capacitors (e.g., 20pF-27pF depending on crystal spec).
+- **Decoupling Capacitors & LDO:** Ensure 0.1µF capacitors are placed as physically close to the RP2040's 3.3V power pins as possible. Provide a 3.3V LDO regulator to step down the USB 5V VBUS to power the logic.
 
 ## 4. PCB Layout & Mechanical Spec
 
