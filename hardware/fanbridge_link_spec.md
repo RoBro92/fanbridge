@@ -69,6 +69,12 @@ For a premium commercial product that survives the hands of homelab users, the f
 - **Physical Buttons:** The RP2040 requires a **BOOTSEL** tactile button (to pull the QSPI CS pin low during boot) to flash the initial firmware. A **RESET** tactile button (pulling the RUN pin low) is also highly recommended so users can reboot the microcontroller without unplugging the USB cable.
 - **Silkscreen Labelling:** The silkscreen must be extremely clear for the end-user. Label all headers ("FAN 1", "FAN 2", "12V MOLEX IN", "USB-C HOST"). Add the project logo/name and a hardware revision number (e.g., `REV 1.0`).
 
+### 3.5 RP2040 Minimal Implementation Requirements
+If your engineer is designing with the raw RP2040 chip (instead of a Raspberry Pi Pico module), they must include the standard minimal viable RP2040 circuit. Refer to the official Raspberry Pi "Hardware Design with RP2040" guide.
+- **External Flash Memory:** The RP2040 has **zero** internal flash. You must include an external QSPI Flash chip (e.g., Winbond W25Q128JVSIQ, 16MB) to store the firmware.
+- **12MHz Crystal Oscillator:** While the RP2040 has an internal oscillator, **USB communication requires high precision**. You must include an external 12MHz crystal and its associated load capacitors (e.g., 27pF).
+- **Decoupling Capacitors:** Standard practice—ensure 0.1µF capacitors are placed as physically close to the RP2040's 3.3V power pins as possible.
+
 ## 4. PCB Layout & Mechanical Spec
 
 ### 4.1 Dimensions & Mounting
