@@ -13,15 +13,19 @@ The FanBridge Link is an ultra-compact, robust fan controller driven by an RP204
 
 ## 2. Core Bill of Materials (BOM) & Components
 
+*Note: For all passive SMD components (resistors, capacitors, LEDs), use **0603** or **0805** imperial sizes. They are the perfect sweet spot for automated pick-and-place assembly while remaining large enough for DIY hand-soldering repairs if necessary.*
+
 | Component | Recommendation / Spec | Purpose |
 | :--- | :--- | :--- |
 | **Microcontroller** | RP2040 (or Raspberry Pi Pico module for rev 1) | Core logic, PWM generation, TACH counting, and USB serial comms. |
 | **USB Interface** | USB-C Receptacle (SMD, 16-pin or 24-pin) | Host data connection and isolated 5V power for the RP2040 logic. Must include 5.1kΩ pull-down resistors on CC pins. |
 | **Power Input** | 4-Pin Molex (Through-hole, Right-Angle or Vertical) | Main power draw from JBOD PSU. Supplies 12V and 5V rails. |
-| **Fan Headers** | 6x 4-Pin PWM Fan Headers (Standard 2.54mm pitch, locking tab) | Connects to 12V, GND, PWM (Output), and TACH (Input). |
+| **Fan Headers** | 6x 4-Pin PWM Fan Headers (Standard 2.54mm pitch) | Connects to 12V, GND, PWM (Output), and TACH (Input). |
 | **Thermistor Header** | 1x 2-Pin Header (2.54mm pitch) | For an external 10K NTC Thermistor (Ambient intake temp measurement). |
 | **Audible Alarm** | 1x SMD Piezo Buzzer (Active or Passive, 3.3V) | Physical audible alerts for dead fans or critical temperatures. |
 | **Status LEDs** | 2x 0603 or 0805 SMD LEDs (Blue, Green) | Diagnostic indicators for "USB Data Link" and "JBOD 12V Power Good". |
+| **Current Sensor** | INA180, INA219, or INA226 (with Shunt Resistor) | High-side current sensing to detect stalled fan motors or electrical shorts. |
+| **Polyfuse (PTC)** | 12V PTC Resettable Fuse (e.g., 10A hold) | Protects the board from catching fire if a fan cable severely shorts out. |
 
 ## 3. Critical Electrical Constraints
 
@@ -54,6 +58,14 @@ To alert users of failing JBOD power supplies, the board will monitor the 12V an
 **Requirement:**
 - **12V Rail:** Voltage divider (e.g., 10KΩ / 2.2KΩ) to safely drop 12V down to a ~2.1V max range, routed to an RP2040 ADC pin.
 - **5V Rail:** Voltage divider (e.g., 10KΩ / 10KΩ) to safely drop 5V down to a ~2.5V max range, routed to a second RP2040 ADC pin.
+
+### 3.4 Current Sensing & Fault Protection (Optional but Recommended)
+A tachometer alone cannot detect a "Locked Rotor" (e.g., a bearing seizes or an object jams the fan blades). When a fan motor stalls, it pulls massive "stall current" which can melt wires or trigger the JBOD PSU's over-current protection.
+
+**Requirements:**
+- **Current Sense Amplifier:** Place a shunt resistor (e.g., 10mΩ to 50mΩ) in series with the main 12V fan power rail. Use a Current Sense IC (like the INA180, INA219, or INA226) to amplify the voltage drop across the shunt and feed it to the RP2040 (either via ADC or I2C).
+- **Behavior:** The RP2040 firmware can actively measure if the fan array is pulling 5+ Amps while the tachometer reads 0 RPM, immediately identifying a seized motor.
+- **PTC Resettable Fuse (Polyfuse):** Place a 12V high-current Polyfuse (e.g., 10A hold / 20A trip) at the Molex 12V input. If a fan cable physically shorts out, the Polyfuse will trip and break the circuit before traces on the PCB melt.
 
 ## 4. PCB Layout & Mechanical Spec
 
