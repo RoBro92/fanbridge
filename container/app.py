@@ -43,21 +43,20 @@ def _load_or_create_secret() -> str:
 
         # create if missing/empty
         p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(".tmp")
         key = secrets.token_urlsafe(32)
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(key)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, p)
-
-        # re-read to be 100% sure all workers see identical bytes
-        for _ in range(3):
-            k2 = p.read_text(encoding="utf-8").strip()
-            if k2:
-                return k2
-            time.sleep(0.05)
-        return key  # fallback
+        try:
+            with open(p, "x", encoding="utf-8") as f:
+                f.write(key)
+                f.flush()
+                os.fsync(f.fileno())
+        except FileExistsError:
+            import time
+            for _ in range(10):
+                k2 = p.read_text(encoding="utf-8").strip()
+                if k2:
+                    return k2
+                time.sleep(0.05)
+        return key
     except Exception:
         # absolute last resort (won't persist across workers)
         return secrets.token_urlsafe(32)
