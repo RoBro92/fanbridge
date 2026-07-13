@@ -48,7 +48,16 @@ export function createAddControllerModal(onAdded) {
   let portsData = [];
 
   const updateSubmitState = () => {
-    submitBtn.disabled = !nameInput.value.trim() || !portSelect.value;
+    const port = portSelect.value;
+    const selectedPortData = portsData.find(p => p.port === port);
+    const type = selectedPortData ? selectedPortData.type : 'unknown';
+    
+    const isValidType = type === 'official' || type === 'diy';
+    const isReady = nameInput.value.trim() && port && isValidType;
+    
+    submitBtn.disabled = !isReady;
+    submitBtn.style.opacity = isReady ? '1' : '0.5';
+    submitBtn.style.cursor = isReady ? 'pointer' : 'not-allowed';
   };
 
   nameInput.addEventListener('input', updateSubmitState);
