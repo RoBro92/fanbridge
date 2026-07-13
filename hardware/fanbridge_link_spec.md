@@ -63,8 +63,9 @@ To alert users of failing JBOD power supplies, the board will monitor the 12V an
 A tachometer alone cannot detect a "Locked Rotor" (e.g., a bearing seizes or an object jams the fan blades). When a fan motor stalls, it pulls massive "stall current" which can melt wires or trigger the JBOD PSU's over-current protection.
 
 **Requirements:**
-- **Current Sense Amplifier:** Place a shunt resistor (e.g., 10mΩ to 50mΩ) in series with the main 12V fan power rail. Use a Current Sense IC (like the INA180, INA219, or INA226) to amplify the voltage drop across the shunt and feed it to the RP2040 (either via ADC or I2C).
-- **Behavior:** The RP2040 firmware can actively measure if the fan array is pulling 5+ Amps while the tachometer reads 0 RPM, immediately identifying a seized motor.
+- **Current Sense Amplifier:** You only need **ONE** sensor for the entire board, placed at the main Molex 12V input, to measure the total current of the fan array.
+  - *Cost-Saving Tip:* Instead of the expensive I2C-based INA219 (£1.00+), use a dirt-cheap analog current sense amplifier like the **INA180** or **INA181** (£0.15). You just feed its analog output voltage directly into a spare ADC pin on the RP2040!
+- **Behavior:** The RP2040 firmware establishes a baseline current for the array. If total current spikes massively (e.g., jumps from 1.5A to 5A) while Fan #3's tachometer drops to 0 RPM, the software can logically deduce that Fan #3 has a seized motor and alert the user.
 - **PTC Resettable Fuse (Polyfuse):** Place a 12V high-current Polyfuse (e.g., 10A hold / 20A trip) at the Molex 12V input. If a fan cable physically shorts out, the Polyfuse will trip and break the circuit before traces on the PCB melt.
 
 ## 4. PCB Layout & Mechanical Spec
