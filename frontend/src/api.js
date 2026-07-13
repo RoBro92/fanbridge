@@ -40,6 +40,7 @@ export const api = {
   getStatus: () => fetchApi('/api/status'),
   getHistory: (hours) => fetchApi(`/api/history?hours=${hours}`),
   getRpStatus: () => fetchApi('/api/rp/status'),
+  getPorts: () => fetchApi('/api/ports'),
   
   saveSettings: (settings) => fetchApi('/api/settings', {
     method: 'POST',
@@ -48,5 +49,12 @@ export const api = {
   saveCurves: (curves) => fetchApi('/api/curves', {
     method: 'POST',
     body: JSON.stringify(curves)
+  }),
+  addController: (controller) => fetchApi('/api/controllers', {
+    method: 'POST',
+    body: JSON.stringify(controller)
+  }),
+  deleteController: (id) => fetchApi(`/api/controllers/${id}`, {
+    method: 'DELETE'
   }),
 };

@@ -12,8 +12,19 @@ export function initDashboardContainer(container) {
       <button class="dash-tab" id="btn-tab-config">Controller Config</button>
     </div>
 
+    <!-- Empty State -->
+    <div id="empty-state-content" style="display: none; text-align: center; padding: 48px 24px; max-width: 500px; margin: 0 auto; height: 100%; flex-direction: column; justify-content: center; align-items: center;">
+      <div class="empty-state-robot"></div>
+      <h2 style="font-size: 28px; margin-bottom: 8px; font-weight: 700; letter-spacing: -0.5px;">404 Controller Not Found</h2>
+      <p class="text-muted" style="font-size: 16px; margin-bottom: 32px;">No controllers set up yet</p>
+      <button class="btn btn-outline" style="border-radius: 8px; font-size: 15px; padding: 12px 24px; display: inline-flex; align-items: center; gap: 8px; color: var(--color-primary);" onclick="document.getElementById('nav-add-controller').click()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        Add your first controller to get started
+      </button>
+    </div>
+
     <!-- TAB 1: Drives & Telemetry -->
-    <div id="tab-drives-content">
+    <div id="tab-drives-content" style="display: none;">
       <!-- Global Dashboard Status Pips -->
       <div style="display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
         <div class="status-pip pip-success" id="pip-container-serial">
@@ -212,8 +223,14 @@ export function initDashboardContainer(container) {
         </div>
       </div>
 
+      <!-- Danger Zone -->
+      <div class="glass-card" style="margin-bottom: 24px; border: 1px solid hsla(0, 80%, 50%, 0.3);">
+        <h3 style="margin: 0 0 8px 0; font-size: 14px; color: var(--color-error);">Danger Zone</h3>
+        <p class="text-muted" style="font-size: 13px; margin: 0 0 16px 0;">Permanently remove this controller from FanBridge.</p>
+        <button class="btn" id="btn-delete-controller" style="background: hsla(0, 80%, 50%, 0.1); border: 1px solid hsla(0, 80%, 50%, 0.3); color: var(--color-error);">Delete Controller</button>
+      </div>
+
       <div id="serial-tools-container"></div>
-      
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 24px; align-items: stretch;">
         <div id="logs-container" style="display: flex; flex-direction: column;"></div>
         <div id="updates-container" style="display: flex; flex-direction: column;"></div>
@@ -405,6 +422,27 @@ export function initDashboardContainer(container) {
     });
   }
 
+  // Bind Delete Controller
+  const btnDeleteController = document.getElementById('btn-delete-controller');
+  if (btnDeleteController) {
+    btnDeleteController.addEventListener('click', async () => {
+      if (!activeControllerId) return;
+      if (!confirm('Are you sure you want to permanently delete this controller? This action cannot be undone.')) return;
+      
+      btnDeleteController.disabled = true;
+      btnDeleteController.textContent = 'Deleting...';
+      try {
+        await api.deleteController(activeControllerId);
+        // On success, simply reload the page or trigger a full state refresh
+        window.location.reload();
+      } catch (err) {
+        alert(err.message);
+        btnDeleteController.disabled = false;
+        btnDeleteController.textContent = 'Delete Controller';
+      }
+    });
+  }
+
   // Initialize Sub-components
   initDriveTable(document.getElementById('drive-table-container'));
   initSerialTools(document.getElementById('serial-tools-container'));
@@ -479,40 +517,88 @@ export function initDashboardContainer(container) {
 
 
 
-export function updateDashboardData(data) {
-  if (!data || !data.rp2040) return;
+export function updateDashboardData(data, activeControllerId) {
+  const emptyState = document.getElementById('empty-state-content');
+  const tabDrives = document.getElementById('tab-drives-content');
+  const tabConfig = document.getElementById('tab-config-content');
+  const dashTabs = document.querySelector('.dash-tabs');
 
-  const rp = data.rp2040;
-  const metrics = rp.telemetry || {};
-  const fans = rp.fans || [];
+  if (!data || !data.controllers || data.controllers.length === 0 || !activeControllerId) {
+    if (emptyState) emptyState.style.display = 'flex';
+    if (tabDrives) tabDrives.style.display = 'none';
+    if (tabConfig) tabConfig.style.display = 'none';
+    if (dashTabs) dashTabs.style.display = 'none';
+    return;
+  }
 
-  const totalWatts = (metrics.bus_v * metrics.current_a).toFixed(1);
-  const amps = metrics.current_a.toFixed(2);
-  const volts = metrics.bus_v.toFixed(2);
+  const controller = data.controllers.find(c => c.id === activeControllerId);
+  if (!controller) return;
 
-  document.getElementById('hero-watts').textContent = `${totalWatts} W`;
-  document.getElementById('hero-amps').textContent = `${amps} A`;
-  document.getElementById('hero-volts').textContent = `${volts} V`;
+  if (emptyState) emptyState.style.display = 'none';
+  if (dashTabs) dashTabs.style.display = 'flex';
+  
+  // Only show the active tab content
+  const tabDrivesBtn = document.getElementById('btn-tab-drives');
+  if (tabDrivesBtn && tabDrivesBtn.classList.contains('active')) {
+    if (tabDrives) tabDrives.style.display = 'block';
+  } else {
+    if (tabConfig) tabConfig.style.display = 'block';
+  }
+
+  const metrics = controller.telemetry || {};
+  const fans = metrics.fans || [];
+
+  // Hide or show elements based on controller type
+  const isDIY = controller.type === 'diy';
+  const pip12v = document.getElementById('pip-container-12v');
+  const pipThermal = document.getElementById('pip-container-thermal');
+  const pipHealth = document.getElementById('pip-container-health');
+  
+  if (pip12v) pip12v.style.display = isDIY ? 'none' : 'flex';
+  if (pipThermal) pipThermal.style.display = isDIY ? 'none' : 'flex';
+  if (pipHealth) pipHealth.style.display = isDIY ? 'none' : 'flex';
+
+  const volts = (metrics.bus_v || 0);
+  const amps = (metrics.current_a || 0);
+  const totalWatts = (volts * amps).toFixed(1);
+
+  const heroWatts = document.getElementById('hero-watts');
+  const heroAmps = document.getElementById('hero-amps');
+  const heroVolts = document.getElementById('hero-volts');
+  
+  if (heroWatts) heroWatts.textContent = isDIY ? '-- W' : `\${totalWatts} W`;
+  if (heroAmps) heroAmps.textContent = isDIY ? '-- A' : `\${amps.toFixed(2)} A`;
+  if (heroVolts) heroVolts.textContent = isDIY ? '-- V' : `\${volts.toFixed(2)} V`;
 
   for (let i = 0; i < 6; i++) {
     const fan = fans[i] || { rpm: 0, pwm_percent: 0, state: 'unknown' };
     const isStalled = fan.pwm_percent > 0 && fan.rpm === 0;
     
-    const cardEl = document.getElementById(`fan-card-${i}`);
-    const badgeEl = document.getElementById(`fan-badge-${i}`);
+    const cardEl = document.getElementById(`fan-card-\${i}`);
+    const badgeEl = document.getElementById(`fan-badge-\${i}`);
     
-    document.getElementById(`fan-rpm-${i}`).textContent = fan.rpm;
-    document.getElementById(`fan-pwm-${i}`).textContent = fan.pwm_percent;
+    const rpmEl = document.getElementById(`fan-rpm-\${i}`);
+    if (rpmEl) rpmEl.textContent = isDIY ? '--' : fan.rpm;
     
-    if (fan.rpm > 0) {
-      badgeEl.innerHTML = '<span style="color: var(--color-success)">Running</span>';
+    const pwmEl = document.getElementById(`fan-pwm-\${i}`);
+    if (pwmEl) pwmEl.textContent = fan.pwm_percent;
+    
+    if (!badgeEl) continue;
+
+    if (isDIY) {
+      badgeEl.innerHTML = '<span style="color: var(--color-success)">OK</span>';
       cardEl.style.borderColor = 'hsla(150, 60%, 45%, 0.3)';
-    } else if (isStalled) {
-      badgeEl.innerHTML = '<span style="color: var(--color-error); font-weight: bold;">STALLED</span>';
-      cardEl.style.borderColor = 'var(--color-error)';
     } else {
-      badgeEl.innerHTML = '<span class="text-muted">Offline</span>';
-      cardEl.style.borderColor = 'var(--glass-border)';
+      if (fan.rpm > 0) {
+        badgeEl.innerHTML = '<span style="color: var(--color-success)">Running</span>';
+        cardEl.style.borderColor = 'hsla(150, 60%, 45%, 0.3)';
+      } else if (isStalled) {
+        badgeEl.innerHTML = '<span style="color: var(--color-error); font-weight: bold;">STALLED</span>';
+        cardEl.style.borderColor = 'var(--color-error)';
+      } else {
+        badgeEl.innerHTML = '<span class="text-muted">Offline</span>';
+        cardEl.style.borderColor = 'var(--glass-border)';
+      }
     }
   }
 }

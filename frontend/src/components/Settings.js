@@ -39,7 +39,7 @@ export function initSettingsContainer(container) {
         <h3 style="margin: 0 0 16px 0;">Global Drive Assignments</h3>
         <p class="text-muted" style="font-size: 13px; margin-bottom: 16px;">Assign detected drives to specific controllers. Drives not assigned to a controller will not factor into its Fan Curve calculation.</p>
         
-        <div style="overflow-x: auto; border: 1px solid var(--glass-border); border-radius: 8px;">
+        <div id="global-drives-table-container" style="display: none; overflow-x: auto; border: 1px solid var(--glass-border); border-radius: 8px;">
           <table style="width: 100%; border-collapse: collapse; font-size: 13px; text-align: left;">
             <thead style="background: var(--color-bg-inset);">
               <tr>
@@ -77,6 +77,10 @@ export function initSettingsContainer(container) {
               </tr>
             </tbody>
           </table>
+        </div>
+        <div id="global-drives-empty-state" style="display: none; text-align: center; padding: 48px; border: 1px dashed var(--glass-border); border-radius: 8px;">
+          <p class="text-muted" style="font-size: 14px; margin: 0;">No controllers added.</p>
+          <p class="text-muted" style="font-size: 13px; margin-top: 8px;">Add a controller first to assign drives.</p>
         </div>
       </div>
       
@@ -351,6 +355,17 @@ export async function loadSettings() {
     // or fetch explicitly from /api/status or whatever endpoint the API has.
     const res = await api.getStatus(); 
     if (!res || !res.config) return;
+
+    // Toggle global drives empty state
+    const drivesTableContainer = document.getElementById('global-drives-table-container');
+    const drivesEmptyState = document.getElementById('global-drives-empty-state');
+    if (!res.controllers || res.controllers.length === 0) {
+      if (drivesTableContainer) drivesTableContainer.style.display = 'none';
+      if (drivesEmptyState) drivesEmptyState.style.display = 'block';
+    } else {
+      if (drivesTableContainer) drivesTableContainer.style.display = 'block';
+      if (drivesEmptyState) drivesEmptyState.style.display = 'none';
+    }
 
     const cfg = res.config;
     document.getElementById('setting-min-interval').value = cfg.min_interval_s || 3;

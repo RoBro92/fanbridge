@@ -6,6 +6,7 @@ import { api, initApi } from './api.js';
 import { initDashboardContainer, updateDashboardData } from './components/Dashboard.js';
 import { initFanChart, updateFanChart } from './components/Charts.js';
 import { initSettingsContainer, loadSettings } from './components/Settings.js';
+import { createAddControllerModal } from './components/AddControllerModal.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const app = document.getElementById('app');
@@ -19,7 +20,7 @@ document.addEventListener('DOMContentLoaded', () => {
   app.innerHTML = `
     <div class="app-wrapper">
       <aside class="sidebar">
-        <div class="sidebar-header" style="justify-content: center; padding: 24px 16px 16px; flex-direction: column; align-items: center;">
+        <div class="sidebar-header" id="nav-logo-home" style="justify-content: center; padding: 24px 16px 16px; flex-direction: column; align-items: center; cursor: pointer; transition: opacity 0.2s;">
           <div style="display: flex; align-items: center; justify-content: center;">
             <img src="/static/fanbridge.png" alt="FanBridge Logo" style="width: 48px; height: 48px; object-fit: contain;">
             <h1 style="font-size: 24px; letter-spacing: -0.5px;">FanBridge</h1>
@@ -30,14 +31,9 @@ document.addEventListener('DOMContentLoaded', () => {
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
               <div class="nav-label" style="margin-bottom: 0;">Controllers</div>
             </div>
-            <a href="#" class="nav-item active" id="nav-dashboard">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
-              <span id="nav-dashboard-text">JBOD 1 (Local)</span>
-            </a>
-            <a href="#" class="nav-item">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-              Add Controller
-            </a>
+            <div id="sidebar-controllers-list">
+              <!-- Controllers rendered dynamically -->
+            </div>
           </div>
           <div class="nav-section">
             <div class="nav-label">System</div>
@@ -101,29 +97,113 @@ document.addEventListener('DOMContentLoaded', () => {
   initSettingsContainer(settingsContainer);
   
   // Navigation State
-  const navDashboard = document.getElementById('nav-dashboard');
+  window.activeControllerId = null;
   const navSettings = document.getElementById('nav-settings');
   const pageTitle = document.getElementById('page-title');
+  const sidebarControllersList = document.getElementById('sidebar-controllers-list');
 
   // Initialize Charts
   for(let i=0; i<6; i++) {
     initFanChart(`fan-chart-${i}`);
   }
 
-  // Navigation Logic
-  navDashboard.addEventListener('click', (e) => {
-    e.preventDefault();
-    navDashboard.classList.add('active');
-    navSettings.classList.remove('active');
-    dashboardContainer.style.display = 'block';
-    settingsContainer.style.display = 'none';
-    pageTitle.textContent = 'Dashboard';
-  });
+  let sidebarRendered = false;
+
+  function renderSidebar(controllers) {
+    if (!controllers || controllers.length === 0) {
+      if (!sidebarRendered) {
+        sidebarControllersList.innerHTML = `
+          <a href="#" class="nav-item active" id="nav-add-controller">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            Add Controller
+          </a>
+        `;
+        document.getElementById('nav-add-controller').addEventListener('click', (e) => {
+          e.preventDefault();
+          createAddControllerModal(() => { pollStatus(); });
+        });
+        // Auto-open modal if no controllers on first load
+        createAddControllerModal(() => { pollStatus(); });
+        sidebarRendered = true;
+      }
+      return;
+    }
+
+    // Set default active if null
+    if (!window.activeControllerId && controllers.length > 0) {
+      window.activeControllerId = controllers[0].id;
+    }
+
+    let html = '';
+    controllers.forEach(c => {
+      const isActive = c.id === window.activeControllerId;
+      html += `
+        <a href="#" class="nav-item ${isActive ? 'active' : ''} controller-nav-item" data-id="${c.id}" data-name="${c.name}">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+          <span>${c.name}</span>
+        </a>
+      `;
+    });
+
+    html += `
+      <a href="#" class="nav-item" id="nav-add-controller">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        Add Controller
+      </a>
+    `;
+
+    sidebarControllersList.innerHTML = html;
+    sidebarRendered = true;
+
+    // Bind clicks
+    sidebarControllersList.querySelectorAll('.controller-nav-item').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.preventDefault();
+        window.activeControllerId = el.getAttribute('data-id');
+        
+        // Update UI state
+        document.querySelectorAll('.controller-nav-item').forEach(n => n.classList.remove('active'));
+        el.classList.add('active');
+        navSettings.classList.remove('active');
+        
+        dashboardContainer.style.display = 'block';
+        settingsContainer.style.display = 'none';
+        pageTitle.textContent = el.getAttribute('data-name') || 'Dashboard';
+        
+        // Immediate UI refresh if data is cached (pollStatus will catch up soon)
+        pollStatus();
+      });
+    });
+
+    document.getElementById('nav-add-controller').addEventListener('click', (e) => {
+      e.preventDefault();
+      createAddControllerModal(() => { pollStatus(); });
+    });
+  }
+
+  const navLogoHome = document.getElementById('nav-logo-home');
+  if (navLogoHome) {
+    navLogoHome.addEventListener('click', (e) => {
+      e.preventDefault();
+      dashboardContainer.style.display = 'block';
+      settingsContainer.style.display = 'none';
+      navSettings.classList.remove('active');
+      
+      let activeName = 'Dashboard';
+      document.querySelectorAll('.controller-nav-item').forEach(el => {
+        if (el.getAttribute('data-id') === window.activeControllerId) {
+          el.classList.add('active');
+          activeName = el.getAttribute('data-name') || 'Dashboard';
+        }
+      });
+      pageTitle.textContent = activeName;
+    });
+  }
 
   navSettings.addEventListener('click', (e) => {
     e.preventDefault();
     navSettings.classList.add('active');
-    navDashboard.classList.remove('active');
+    document.querySelectorAll('.controller-nav-item').forEach(n => n.classList.remove('active'));
     dashboardContainer.style.display = 'none';
     settingsContainer.style.display = 'block';
     pageTitle.textContent = 'Global Settings';
@@ -133,7 +213,8 @@ document.addEventListener('DOMContentLoaded', () => {
   async function pollStatus() {
     try {
       const data = await api.getStatus();
-      updateDashboardData(data);
+      renderSidebar(data.controllers);
+      updateDashboardData(data, window.activeControllerId);
       
       const serialPip = document.getElementById('pip-serial-status');
       if (serialPip) {

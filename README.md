@@ -54,11 +54,11 @@ Install FanBridge directly through the Unraid Community Applications plugin for 
 
 | Parameter | Recommended Setting | Description |
 |---|---|---|
-| **Device mapping** | Leave blank by default | Allows Docker to start even if the controller is unplugged. You can map the device later when connected. |
-| **Serial path** | `/dev/serial/by-id` (read-only) | Optional mapping for stable path naming. |
-| **Privileged** | Off (see note below) | Not required for normal operation. Only needed for in-app firmware updates. |
+| **USB Controller Device** | `/dev/ttyACM0` or `/dev/serial/by-id/usb-...` | Pass through the specific USB device. Required if not running Privileged. |
+| **Serial path** | `/dev/serial/by-id` (read-only) | Optional mapping for stable path naming if passing through the whole directory. |
+| **Privileged** | Off (see note below) | Enables auto-detection of all USB controllers without manual device mapping. Also needed for in-app firmware updates. |
 
-*Note: The preferred serial port defaults to `/dev/ttyACM0` (RP2040). You may override this via the `FANBRIDGE_SERIAL_PORT` environment variable.*
+*Note: The backend scans `/dev/serial/by-id/*`, `/dev/ttyACM*`, and `/dev/ttyUSB*` automatically.*
 
 #### Enabling In-App Firmware Updates (Optional)
 

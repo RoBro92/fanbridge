@@ -171,3 +171,24 @@ h1, h2, h3, h4, h5, h6 {
   background: var(--color-text-muted);
   box-shadow: 0 0 8px var(--color-text-muted);
 }
+
+.empty-state-robot {
+  width: 280px;
+  height: 280px;
+  background-image: url('/static/empty-state-dark.jpg');
+  background-size: cover;
+  background-repeat: no-repeat;
+  background-position: center;
+  mix-blend-mode: screen;
+  margin: 0 auto 16px auto;
+  opacity: 0.95;
+  -webkit-mask-image: radial-gradient(circle at center, black 40%, transparent 70%);
+  mask-image: radial-gradient(circle at center, black 40%, transparent 70%);
+}
+
+html[data-theme="light"] .empty-state-robot {
+  background-image: url('/static/empty-state-light.jpg');
+  mix-blend-mode: multiply;
+  -webkit-mask-image: radial-gradient(circle at center, black 40%, transparent 70%);
+  mask-image: radial-gradient(circle at center, black 40%, transparent 70%);
+}
