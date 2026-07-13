@@ -40,13 +40,13 @@ For a professional, commercial-grade board (similar to ATX PC motherboards), use
 **Requirement per TACH channel:**
 - **Schottky Diode:** Place a Schottky diode (e.g., BAT54) in series with the Fan header to block 12V backfeeding. (Cathode facing the fan).
 - **Pull-Up & Filter:** A 10KΩ resistor pulling the MCU side of the diode to 3.3V, and a 0.1µF capacitor to Ground.
-- **Buffer IC:** Route the filtered signal through 1 channel of a **SN74LVC14A** (Hex Schmitt-Trigger Inverter). This IC will snap the noisy analog waveform into a perfectly crisp, debounced 3.3V digital square wave, completely offloading the filtering work from the RP2040 firmware.
+- **Buffer IC:** Route the filtered signal through 1 channel of a **SN74LVC14APWR** (Hex Schmitt-Trigger Inverter, TSSOP-14 package for space savings). This IC will snap the noisy analog waveform into a perfectly crisp, debounced 3.3V digital square wave, completely offloading the filtering work from the RP2040 firmware.
 
 ```mermaid
 graph LR
     Fan(Fan TACH) -->|Open Collector| Diode[Schottky Diode]
     Diode --> Filter(10K Pull-Up + 0.1µF Cap)
-    Filter --> Buffer[SN74LVC14A Schmitt Trigger]
+    Filter --> Buffer[SN74LVC14APWR Schmitt Trigger]
     Buffer -->|Clean 3.3V Square Wave| MCU(RP2040 GPIO)
 ```
 
@@ -83,8 +83,44 @@ The board must be as compact as possible while safely routing 12V traces capable
 
 ## 5. Summary for the Engineer
 1. Isolate USB 5V and Molex 12V/5V. Share Ground.
-2. Step down USB 5V to 3.3V for the RP2040.
-3. Protect 6x TACH inputs using Diode Clamps and 3.3V Pull-ups.
+2. Step down USB 5V to 3.3V for the RP2040 logic.
+3. Protect 6x TACH inputs using Diode Clamps, 3.3V Pull-ups, and the SN74LVC14APWR Buffer.
 4. Protect 6x PWM outputs using series resistors.
-5. Provide 2x ADC Voltage Dividers for Molex 12V and 5V.
+5. Use a single INA219 at the Molex 12V input for total array current & voltage telemetry.
 6. Provide thick 12V/GND copper pours for massive fan current.
+
+## 6. Architecture & Logic Schematic
+Use this conceptual flow to guide your EasyEDA/KiCad schematic capture.
+
+```mermaid
+graph TD
+    subgraph Power_Delivery [Power Delivery]
+        Molex[4-Pin Molex 12V] --> Polyfuse[12V PTC Polyfuse]
+        Polyfuse --> INA219_Shunt[INA219 Shunt Resistor]
+        INA219_Shunt --> 12V_Plane[Main 12V Fan Plane]
+        
+        USB[USB-C 5V VBUS] --> ESD_USB[TVS Diode Array]
+        ESD_USB --> LDO[3.3V LDO Voltage Regulator]
+        LDO --> 3V3_Plane[3.3V Logic Plane]
+    end
+
+    subgraph MCU [RP2040 Core]
+        3V3_Plane --> RP2040
+        Boot[BOOTSEL Button] --> RP2040
+        Reset[RESET Button] --> RP2040
+        DS18B20[DS18B20 Header + 4.7K] --> RP2040
+    end
+    
+    subgraph Telemetry [I2C Telemetry]
+        INA219_Shunt --> INA219_IC[INA219 IC]
+        INA219_IC -->|I2C SDA/SCL| RP2040
+    end
+
+    subgraph Fans [Fan Control Array x6]
+        12V_Plane --> Headers[6x 4-Pin Fan Headers]
+        RP2040 -->|PWM 3.3V + Resistor| Headers
+        Headers -->|TACH Open-Drain| Clamps[Schottky Diodes]
+        Clamps -->|Pull-Up 3.3V| HexBuffer[SN74LVC14APWR]
+        HexBuffer -->|Clean 3.3V Square Wave| RP2040
+    end
+```
