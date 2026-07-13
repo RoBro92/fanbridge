@@ -148,6 +148,7 @@ static void handleLine(String line) {
 
   String cmd = line; cmd.toUpperCase();
 
+  if (cmd == "ID" || cmd == "ID?")            { Serial.println(F("FANBRIDGE_DIY")); return; }
   if (cmd == "VERSION" || cmd == "VERSION?") { Serial.println(FW_VERSION); return; }
   if (cmd == "PING")                          { Serial.println(F("PONG")); return; }
   if (cmd == "RPM" || cmd == "RPM?")          { Serial.println(F("RPM: 0")); return; }
