@@ -24,6 +24,7 @@ The FanBridge Link is an ultra-compact, robust fan controller driven by an RP204
 | **Temp Sensor Header** | 1x 3-Pin Header (2.54mm pitch) with 4.7KΩ Pull-up | For an external **DS18B20** Digital Temperature Sensor (Ambient intake temp). |
 | **Audible Alarm** | 1x SMD Piezo Buzzer (Active or Passive, 3.3V) | Physical audible alerts for dead fans or critical temperatures. |
 | **Status LEDs** | 2x System LEDs (Blue, Green), 6x Fan LEDs (Red, 0603 SMD) | System LEDs for USB/Power. Per-Fan Red LEDs for physical diagnostic fault alerts. |
+| **Expansion Headers** | 1x 4-Pin I2C (3.3V), 1x 3-Pin ARGB (5V) | I2C for external OLED screens. ARGB for external WS2812B server rack lighting. |
 | **Current Sensor** | INA180, INA219, or INA226 (with Shunt Resistor) | High-side current sensing to detect stalled fan motors or electrical shorts. |
 | **Polyfuse (PTC)** | 12V PTC Resettable Fuse (e.g., 10A hold) | Protects the board from catching fire if a fan cable severely shorts out. |
 
