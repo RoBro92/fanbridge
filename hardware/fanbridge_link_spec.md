@@ -61,6 +61,12 @@ To prevent feature creep and minimize analog trace noise, all power telemetry is
 - **Fault Logic:** If the INA219 detects a massive current spike (e.g., from 1.5A to 5A) while any individual fan's tachometer drops to 0 RPM, the firmware deduces a locked-rotor motor stall and alerts the user.
 - **PTC Resettable Fuse (Polyfuse):** Place a 12V high-current Polyfuse (e.g., 10A hold / 20A trip) at the Molex 12V input. If a fan cable physically shorts out, the Polyfuse will trip and break the circuit before traces on the PCB melt.
 
+### 3.4 Commercialization & Durability (Final Touches)
+For a premium commercial product that survives the hands of homelab users, the following must be included:
+- **ESD Protection (TVS Diodes):** Users carry static electricity. Place an ESD TVS Diode Array (e.g., USBLC6-2SC6) on the USB-C Data lines (D+/D-) right at the connector. Ensure the Schottky diodes on the Fan TACH lines are rated to absorb static shocks when users hot-plug fans.
+- **Physical Buttons:** The RP2040 requires a **BOOTSEL** tactile button (to pull the QSPI CS pin low during boot) to flash the initial firmware. A **RESET** tactile button (pulling the RUN pin low) is also highly recommended so users can reboot the microcontroller without unplugging the USB cable.
+- **Silkscreen Labelling:** The silkscreen must be extremely clear for the end-user. Label all headers ("FAN 1", "FAN 2", "12V MOLEX IN", "USB-C HOST"). Add the project logo/name and a hardware revision number (e.g., `REV 1.0`).
+
 ## 4. PCB Layout & Mechanical Spec
 
 ### 4.1 Dimensions & Mounting
