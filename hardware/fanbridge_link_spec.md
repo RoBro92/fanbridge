@@ -52,20 +52,13 @@ graph LR
 The RP2040 outputs a 3.3V PWM signal. Intel's 4-pin PWM fan specification states that fans expect a 5V or 3.3V PWM signal (pulled up to 5V internally by the fan). 
 - **Requirement:** Route the RP2040 PWM outputs directly to the Fan Headers. Include a small current-limiting series resistor (e.g., 220Ω - 1KΩ) on each PWM line to protect the MCU pins in case of a short circuit.
 
-### 3.3 Active Voltage Monitoring (ADC)
-To alert users of failing JBOD power supplies, the board will monitor the 12V and 5V rails from the Molex connector.
-
-**Requirement:**
-- **12V Rail:** Voltage divider (e.g., 10KΩ / 2.2KΩ) to safely drop 12V down to a ~2.1V max range, routed to an RP2040 ADC pin.
-- **5V Rail:** Voltage divider (e.g., 10KΩ / 10KΩ) to safely drop 5V down to a ~2.5V max range, routed to a second RP2040 ADC pin.
-
-### 3.4 Current Sensing & Fault Protection (Optional but Recommended)
-A tachometer alone cannot detect a "Locked Rotor" (e.g., a bearing seizes or an object jams the fan blades). When a fan motor stalls, it pulls massive "stall current" which can melt wires or trigger the JBOD PSU's over-current protection.
+### 3.3 Power & Fault Monitoring (INA219)
+To prevent feature creep and minimize analog trace noise, all power telemetry is handled by a single digital I2C sensor rather than multiple ADC voltage dividers. 
 
 **Requirements:**
-- **Current Sense Amplifier:** You only need **ONE** sensor for the entire board, placed at the main Molex 12V input, to measure the total current of the fan array.
-  - *Cost-Saving Tip:* Instead of the expensive I2C-based INA219 (£1.00+), use a dirt-cheap analog current sense amplifier like the **INA180** or **INA181** (£0.15). You just feed its analog output voltage directly into a spare ADC pin on the RP2040!
-- **Behavior:** The RP2040 firmware establishes a baseline current for the array. If total current spikes massively (e.g., jumps from 1.5A to 5A) while Fan #3's tachometer drops to 0 RPM, the software can logically deduce that Fan #3 has a seized motor and alert the user.
+- **Component:** Use a single **INA219** (e.g., INA219AIDCNR) placed at the main Molex 12V input.
+- **Combined Telemetry:** The INA219 simultaneously measures the **Bus Voltage** (to detect if the JBOD's 12V power supply is failing or dropping voltage under load) and the **Total Current** (Amps) drawn by the entire fan array.
+- **Fault Logic:** If the INA219 detects a massive current spike (e.g., from 1.5A to 5A) while any individual fan's tachometer drops to 0 RPM, the firmware deduces a locked-rotor motor stall and alerts the user.
 - **PTC Resettable Fuse (Polyfuse):** Place a 12V high-current Polyfuse (e.g., 10A hold / 20A trip) at the Molex 12V input. If a fan cable physically shorts out, the Polyfuse will trip and break the circuit before traces on the PCB melt.
 
 ## 4. PCB Layout & Mechanical Spec
