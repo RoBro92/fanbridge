@@ -4,7 +4,12 @@
   <Overview><![CDATA[
   FanBridge – bridge Unraid drive temperatures to an external microcontroller (RP2040) over USB serial to control PWM fans.
   
-  Defaults match a known‑working Unraid setup: port 8080, appdata at /mnt/maincache/appdata/fanbridge, the Unraid emhttp directory mounted read‑only at /unraid, and a serial TTY at /dev/ttyACM0. Only these basics are included for now to avoid confusion.]]></Overview>
+  USB Passthrough:
+  To allow the container to detect your FanBridge controller(s), you must map the USB device. 
+  - Option 1 (Recommended): Enable "Privileged" mode. This allows FanBridge to automatically scan and detect all plugged-in controllers.
+  - Option 2: Add a "Device" mapping for your specific controller's serial port (e.g., /dev/ttyACM0 or /dev/serial/by-id/usb-...).
+  
+  Defaults match a known‑working Unraid setup: port 8080, appdata at /mnt/maincache/appdata/fanbridge, the Unraid emhttp directory mounted read‑only at /unraid.]]></Overview>
   <Category>System:Utilities</Category>
   <Registry>https://github.com/RoBroLabs/fanbridge/pkgs/container/fanbridge</Registry>
   <Repository>ghcr.io/robrolabs/fanbridge:latest</Repository>
@@ -28,9 +33,8 @@
 
   <Config Name="Unraid emhttp directory (read-only)" Target="/unraid" Default="/var/local/emhttp" Type="Path" Mode="ro" Description="Bind the full emhttp directory (preferred)." Display="always" Required="false" Mask="false"/>
 
-  <!-- Serial TTY: default /dev/ttyACM0 -->
-  <Config Name="Serial TTY" Target="/dev/ttyACM0" Default="/dev/ttyACM0" Type="Path" Mode="rw" Description="Bind the serial device inside the container at the same path." Display="always" Required="false" Mask="false"/>
-  <Config Name="/dev/ttyACM0" Target="/dev/ttyACM0" Default="/dev/ttyACM0" Type="Device" Description="Expose the serial device directly." Display="always" Required="false" Mask="false"/>
+  <!-- USB Device Mapping -->
+  <Config Name="USB Controller Device" Target="/dev/ttyACM0" Default="/dev/ttyACM0" Type="Device" Description="Pass through the USB controller serial device if not running in Privileged mode." Display="always" Required="false" Mask="false"/>
 
   <!-- Optional: single-file bind (advanced) -->
   <Config Name="Unraid disks.ini (ro)" Target="/unraid/disks.ini" Default="/var/local/emhttp/disks.ini" Type="Path" Mode="ro" Description="Bind only disks.ini (optional)." Display="advanced" Required="false" Mask="false"/>

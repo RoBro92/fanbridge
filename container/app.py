@@ -317,8 +317,6 @@ except Exception:
 # Initialize serial service context
 try:
     serial_svc.init(
-        baud=SERIAL_BAUD,
-        preferred=SERIAL_PREF,
         logger=log,
         dbg_should=_dbg_should,
         inc_open_fail=_m_inc_serial_open_fail,
@@ -327,6 +325,7 @@ except Exception:
     pass
 
 DEFAULT_CONFIG = {
+    "controllers": [],
     "poll_interval_seconds": 7,     # UI refresh; clamped 3–60s
     "hdd_thresholds": [30,32,35,38,40,42,44,45],
     "hdd_pwm":        [0,20,30,40,50,60,80,100],
@@ -468,6 +467,9 @@ def load_config():
             log.info("Normalised config with defaults (saved)")
         except Exception:
             pass
+    for c in merged.get("controllers", []):
+        if c.get("id"):
+            serial_svc.register_controller(c["id"], c.get("port", ""), c.get("baud", 115200))
     return merged
 
 def save_config(cfg: dict):
@@ -887,17 +889,28 @@ def index():
 def status():
     data = compute_status()
     try:
-        ss = serial_svc.get_serial_status(full=False)
-        data["serial"] = {
-            "preferred": ss.get("preferred"),
-            "available": ss.get("available"),
-            "connected": ss.get("connected"),
-            "baud": ss.get("baud"),
-            "message": ss.get("message"),
-        }
+        for c in data.get("controllers", []):
+            cid = c.get("id")
+            if cid:
+                ss = serial_svc.get_serial_status(cid, full=False)
+                c["serial"] = {
+                    "preferred": ss.get("preferred"),
+                    "available": ss.get("available"),
+                    "connected": ss.get("connected"),
+                    "baud": ss.get("baud"),
+                    "message": ss.get("message"),
+                }
+                c["telemetry"] = {}
+                if ss.get("connected"):
+                    res = serial_svc.serial_send_line(cid, "STATUS", expect_reply=True, timeout=0.2)
+                    if res.get("ok") and res.get("reply"):
+                        try:
+                            import json
+                            c["telemetry"] = json.loads(res["reply"])
+                        except Exception:
+                            pass
     except Exception as e:
         logging.getLogger("fanbridge").exception("serial status embed failed: %s", e)
-        data["serial"] = {"available": False, "connected": False, "message": "error"}
     return jsonify(data)
 
 @app.get("/api/history")
@@ -911,6 +924,66 @@ def history():
 
 
 
+
+# --------- API: Controllers and Ports ---------
+
+@app.get("/api/ports")
+def get_ports():
+    ports = serial_svc.list_serial_ports()
+    results = []
+    for p in ports:
+        ctype = serial_svc.identify_port(p)
+        results.append({"port": p, "type": ctype})
+    return jsonify({"ok": True, "ports": results})
+
+@app.post("/api/controllers")
+def add_controller():
+    data = request.json or {}
+    cid = data.get("id")
+    cname = data.get("name")
+    ctype = data.get("type")
+    cport = data.get("port")
+    cbaud = int(data.get("baud", 115200))
+
+    if not cid or not ctype or not cport:
+        return jsonify({"ok": False, "error": "Missing required fields"}), 400
+
+    cfg = load_config()
+    controllers = cfg.setdefault("controllers", [])
+    
+    # Check if exists
+    for c in controllers:
+        if c.get("id") == cid:
+            return jsonify({"ok": False, "error": "Controller ID already exists"}), 400
+
+    new_c = {
+        "id": cid,
+        "name": cname or cid,
+        "type": ctype,
+        "port": cport,
+        "baud": cbaud
+    }
+    controllers.append(new_c)
+    save_config(cfg)
+    serial_svc.register_controller(cid, cport, cbaud)
+    
+    return jsonify({"ok": True})
+
+@app.delete("/api/controllers/<cid>")
+def delete_controller(cid):
+    cfg = load_config()
+    controllers = cfg.get("controllers", [])
+    
+    # Filter out the controller
+    new_controllers = [c for c in controllers if c.get("id") != cid]
+    if len(new_controllers) == len(controllers):
+        return jsonify({"ok": False, "error": "Controller not found"}), 404
+        
+    cfg["controllers"] = new_controllers
+    save_config(cfg)
+    serial_svc.unregister_controller(cid)
+    
+    return jsonify({"ok": True})
 
 # --------- API: Serial endpoints moved to api/serial blueprint ---------
 

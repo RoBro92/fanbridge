@@ -22,27 +22,36 @@ class SerialProto(Protocol):
 
 
 class _Ctx:
-    baud: int = 115200
-    preferred: str = ""
-    logger: logging.Logger | None = None
-    dbg_should = None  # callable(tag: str, interval_s: int) -> bool
-    inc_open_fail = None  # callable() -> None
+    def __init__(self, port: str, baud: int):
+        self.preferred = port
+        self.baud = baud
+        self.last_good: str | None = None
 
+_CTXS: dict[str, _Ctx] = {}
 
-_CTX = _Ctx()
-_SERIAL_LAST_GOOD: str | None = None
+_GLOBAL_LOGGER: logging.Logger | None = None
+_GLOBAL_DBG_SHOULD = None
+_GLOBAL_INC_OPEN_FAIL = None
 
+def init(*, logger: logging.Logger, dbg_should, inc_open_fail) -> None:
+    global _GLOBAL_LOGGER, _GLOBAL_DBG_SHOULD, _GLOBAL_INC_OPEN_FAIL
+    _GLOBAL_LOGGER = logger
+    _GLOBAL_DBG_SHOULD = dbg_should
+    _GLOBAL_INC_OPEN_FAIL = inc_open_fail
 
-def init(*, baud: int, preferred: str, logger: logging.Logger, dbg_should, inc_open_fail) -> None:
-    _CTX.baud = int(baud)
-    _CTX.preferred = preferred or ""
-    _CTX.logger = logger
-    _CTX.dbg_should = dbg_should
-    _CTX.inc_open_fail = inc_open_fail
+def register_controller(cid: str, port: str, baud: int) -> None:
+    if cid in _CTXS:
+        _CTXS[cid].preferred = port
+        _CTXS[cid].baud = baud
+    else:
+        _CTXS[cid] = _Ctx(port, baud)
 
+def unregister_controller(cid: str) -> None:
+    if cid in _CTXS:
+        del _CTXS[cid]
 
 def _log() -> logging.Logger:
-    return _CTX.logger or logging.getLogger("fanbridge")
+    return _GLOBAL_LOGGER or logging.getLogger("fanbridge")
 
 
 def _unique_order(seq):
@@ -60,6 +69,8 @@ def list_serial_ports():
     candidates.extend(sorted(glob.glob("/dev/serial/by-id/*")))
     candidates.extend(sorted(glob.glob("/dev/ttyACM*")))
     candidates.extend(sorted(glob.glob("/dev/ttyUSB*")))
+    candidates.extend(sorted(glob.glob("/dev/pts/*")))
+    candidates.extend(sorted(glob.glob("/tmp/ttyFAN*")))
     if list_ports:
         try:
             for p in list_ports.comports():
@@ -71,7 +82,7 @@ def list_serial_ports():
     return _unique_order(candidates)
 
 
-def probe_serial_open(port: str, baud: int | None = None):
+def probe_serial_open(port: str, baud: int):
     if not port:
         return False, "no port specified"
     if port.startswith("/dev/ttyS"):
@@ -79,7 +90,7 @@ def probe_serial_open(port: str, baud: int | None = None):
     if serial is None:
         return False, "pyserial not available"
     try:
-        s = serial.Serial(port=port, baudrate=baud or _CTX.baud, timeout=0.2)
+        s = serial.Serial(port=port, baudrate=baud, timeout=0.2)
         try:
             ok = True
         finally:
@@ -91,7 +102,7 @@ def probe_serial_open(port: str, baud: int | None = None):
             if port.startswith("/dev/tty."):
                 cu_port = "/dev/cu." + port.split("/dev/tty.", 1)[1]
                 if os.path.exists(cu_port):
-                    s2 = serial.Serial(port=cu_port, baudrate=baud or _CTX.baud, timeout=0.2)
+                    s2 = serial.Serial(port=cu_port, baudrate=baud, timeout=0.2)
                     try:
                         ok2 = True
                     finally:
@@ -101,78 +112,71 @@ def probe_serial_open(port: str, baud: int | None = None):
             pass
         lower = msg.lower()
         if any(k in lower for k in ("permission", "denied", "operation not permitted")):
-            msg = (
-                f"{msg} (hint: map the device into the container using --device={port} or Unraid's Device field; "
-                "do not bind-mount the TTY. Also map /dev/serial/by-id (ro) and optionally set FANBRIDGE_SERIAL_PORT to the by-id path)"
-            )
+            msg = f"{msg} (hint: map the device into the container using --device={port})"
         try:
-            _log().warning("serial open failed | port=%s baud=%s err=%s", port, baud or _CTX.baud, msg)
-            if _CTX.inc_open_fail:
-                _CTX.inc_open_fail()
+            _log().warning("serial open failed | port=%s baud=%s err=%s", port, baud, msg)
+            if _GLOBAL_INC_OPEN_FAIL:
+                _GLOBAL_INC_OPEN_FAIL()
         except Exception:
             pass
         return False, msg
 
 
-def _choose_best_port(candidates: list[str]) -> str:
-    byid = [p for p in candidates if "/serial/by-id/" in p]
-    if byid:
-        return byid[0]
-    return candidates[0] if candidates else ""
-
-
-def preferred_serial_port() -> str:
-    ports = list_serial_ports()
-    if globals().get("_SERIAL_LAST_GOOD") and globals()["_SERIAL_LAST_GOOD"] in ports:
-        return str(globals()["_SERIAL_LAST_GOOD"])  # type: ignore
-    if _CTX.preferred and os.path.exists(_CTX.preferred):
-        return _CTX.preferred
-    return _choose_best_port(ports)
-
-
-def open_serial(port: str | None = None, baud: int | None = None, timeout: float = 1.0) -> tuple[SerialProto | None, str | None]:
+def identify_port(port: str, timeout: float = 0.5) -> str:
     if serial is None:
-        return None, "pyserial not available"
-    ports = list_serial_ports()
-    cand = []
-    if port:
-        cand.append(port)
-    pref = preferred_serial_port()
-    if pref:
-        cand.append(pref)
-    cand.extend(ports)
-    tried = set()
-    last_err = None
-    for p in _unique_order(cand):
-        if not p or p in tried:
-            continue
-        tried.add(p)
-        try:
-            s = serial.Serial(port=p, baudrate=baud or _CTX.baud, timeout=timeout)
-            s_proto: SerialProto = s
-            try:
-                s_proto.reset_input_buffer()
-                s_proto.reset_output_buffer()
-            except Exception:
-                pass
-            try:
-                globals()["_SERIAL_LAST_GOOD"] = getattr(s_proto, "port", p)
-            except Exception:
-                pass
-            return s_proto, None
-        except Exception as e:
-            last_err = str(e)
-            continue
+        return "unknown"
     try:
-        _log().warning("serial open failed | port=%s baud=%s err=%s", (port or pref or ""), baud or _CTX.baud, last_err or "no candidates")
+        s = serial.Serial(port=port, baudrate=115200, timeout=timeout)
+        try:
+            s.reset_input_buffer()
+            s.reset_output_buffer()
+            s.write(b"ID?\n")
+            s.flush()
+            resp = s.readline().decode("utf-8", errors="ignore").strip()
+            if "FANBRIDGE_OFFICIAL" in resp:
+                return "official"
+            if "FANBRIDGE_DIY" in resp:
+                return "diy"
+        finally:
+            s.close()
     except Exception:
         pass
-    return None, (last_err or "no serial ports detected")
+    return "unknown"
+
+def open_serial(cid: str, timeout: float = 1.0) -> tuple[SerialProto | None, str | None]:
+    if serial is None:
+        return None, "pyserial not available"
+    ctx = _CTXS.get(cid)
+    if not ctx:
+        return None, "unknown controller id"
+    port = ctx.preferred
+    if not port:
+        return None, "no port configured"
+        
+    try:
+        s = serial.Serial(port=port, baudrate=ctx.baud, timeout=timeout)
+        s_proto: SerialProto = s
+        try:
+            s_proto.reset_input_buffer()
+            s_proto.reset_output_buffer()
+        except Exception:
+            pass
+        ctx.last_good = getattr(s_proto, "port", port)
+        return s_proto, None
+    except Exception as e:
+        last_err = str(e)
+        try:
+            _log().warning("serial open failed | cid=%s port=%s baud=%s err=%s", cid, port, ctx.baud, last_err)
+            if _GLOBAL_INC_OPEN_FAIL:
+                _GLOBAL_INC_OPEN_FAIL()
+        except Exception:
+            pass
+        return None, last_err
 
 
-def serial_send_line(line: str, expect_reply: bool = True, timeout: float = 1.0) -> dict:
+def serial_send_line(cid: str, line: str, expect_reply: bool = True, timeout: float = 1.0) -> dict:
     out = {"ok": False, "port": None, "echo": line, "reply": None, "error": None}
-    s, err = open_serial(timeout=timeout)
+    s, err = open_serial(cid, timeout=timeout)
     if err:
         out["error"] = err
         return out
@@ -183,13 +187,13 @@ def serial_send_line(line: str, expect_reply: bool = True, timeout: float = 1.0)
     try:
         payload = (line or "").strip() + "\n"
         data = payload.encode("utf-8", errors="ignore")
-        _log().debug("Serial TX: %s", (line or "").strip())
+        _log().debug("Serial TX [%s]: %s", cid, (line or "").strip())
         s.write(data)
         s.flush()
         if expect_reply:
             resp = s.readline().decode("utf-8", errors="ignore").strip()
             out["reply"] = resp if resp else None
-            _log().debug("Serial RX: %s", out["reply"])
+            _log().debug("Serial RX [%s]: %s", cid, out["reply"])
         out["ok"] = True
         return out
     except Exception as e:
@@ -202,7 +206,7 @@ def serial_send_line(line: str, expect_reply: bool = True, timeout: float = 1.0)
             pass
 
 
-def serial_set_pwm_percent(value: Any) -> dict:
+def serial_set_pwm_percent(cid: str, value: Any) -> dict:
     if not isinstance(value, (int, float, str)):
         return {"ok": False, "error": "invalid value"}
     try:
@@ -211,70 +215,68 @@ def serial_set_pwm_percent(value: Any) -> dict:
         return {"ok": False, "error": "invalid value"}
     if v < 0: v = 0
     if v > 100: v = 100
-    res = serial_send_line(str(v), expect_reply=True)
+    res = serial_send_line(cid, str(v), expect_reply=True)
     res["value"] = v
     return res
 
 
-def get_serial_status(full: bool = True):
+def get_serial_status(cid: str, full: bool = True):
+    ctx = _CTXS.get(cid)
+    if not ctx:
+        return {
+            "preferred": "",
+            "ports": list_serial_ports() if full else None,
+            "available": False,
+            "connected": False,
+            "baud": 115200,
+            "message": f"unknown controller {cid}"
+        }
+
+    preferred = ctx.preferred
     ports = list_serial_ports()
-    preferred = preferred_serial_port()
     available = bool(ports)
     connected = False
     message = "no ports detected"
 
     try:
-        if (not available) and _CTX.preferred and not os.path.exists(_CTX.preferred):
-            message = f"preferred port not present: {_CTX.preferred}"
+        if (not available) and preferred and not os.path.exists(preferred):
+            message = f"preferred port not present: {preferred}"
     except Exception:
         pass
 
     if preferred:
-        ok, msg = probe_serial_open(preferred, _CTX.baud)
+        ok, msg = probe_serial_open(preferred, ctx.baud)
         connected = ok
         message = msg
-        if not ok and available:
-            for p in ports:
-                if p == preferred:
-                    continue
-                o2, m2 = probe_serial_open(p, _CTX.baud)
-                if o2:
-                    preferred = p
-                    connected = True
-                    message = m2
-                    try:
-                        globals()["_SERIAL_LAST_GOOD"] = p
-                    except Exception:
-                        pass
-                    break
+        
         if not connected:
             try:
                 lvl = logging.WARNING if any(s in str(message).lower() for s in ("denied", "permission", "not opened", "busy", "no such device")) else logging.INFO
                 _log().log(
                     lvl,
-                    "serial not connected | port=%s baud=%s reason=%s (map device and grant permissions)",
-                    preferred, _CTX.baud, message,
+                    "serial not connected | cid=%s port=%s baud=%s reason=%s",
+                    cid, preferred, ctx.baud, message,
                 )
             except Exception:
                 pass
     elif available:
-        message = "ports detected but none selected"
+        message = "ports detected but no port configured for controller"
 
     data = {
         "preferred": preferred,
         "ports": ports if full else None,
         "available": available,
         "connected": (connected and not (preferred or "").startswith("/dev/ttyS")),
-        "baud": _CTX.baud,
+        "baud": ctx.baud,
         "message": message,
     }
     if not full:
         data.pop("ports", None)
     try:
-        if _CTX.dbg_should and _CTX.dbg_should("serial", 8):
+        if _GLOBAL_DBG_SHOULD and _GLOBAL_DBG_SHOULD("serial", 8):
             _log().debug(
-                "serial | preferred=%s available=%s connected=%s baud=%s msg=%s ports=%s",
-                data.get("preferred"), data.get("available"), data.get("connected"), data.get("baud"), data.get("message"), len(ports)
+                "serial [%s] | preferred=%s available=%s connected=%s baud=%s msg=%s",
+                cid, data.get("preferred"), data.get("available"), data.get("connected"), data.get("baud"), data.get("message")
             )
     except Exception:
         pass

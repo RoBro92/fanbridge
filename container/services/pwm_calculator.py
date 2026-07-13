@@ -5,9 +5,8 @@ import logging
 from services.disks import read_unraid_disks, is_bind_mounted_file
 from services import serial as serial_svc
 
-_AUTO_LAST_DUTY: int | None = None
-_AUTO_LAST_TS: float | None = None
-_AUTO_PAUSED_MSG: str | None = None
+_AUTO_LAST_DUTY: dict[str, int] = {}
+_AUTO_LAST_TS: dict[str, float] = {}
 
 def map_temp_to_pwm(temp: int, thresholds: list[int], pwms: list[int]) -> int:
     step = 0
@@ -104,42 +103,60 @@ def compute_status(app_context: dict) -> dict:
             pass
 
     auto_enabled = bool(cfg.get("auto_apply"))
-    auto_last_duty = _AUTO_LAST_DUTY
-    auto_last_ts = _AUTO_LAST_TS
-    auto_paused_msg = None
-    if auto_enabled:
-        try:
-            sstat = serial_svc.get_serial_status(full=False)
-            if not sstat.get("connected"):
-                auto_paused_msg = "controller not connected"
-                # Backoff logging for disconnected state
-                if dbg_should("auto_apply_disconnected", 60):
-                    log.warning("auto-apply paused: controller not connected")
-            else:
-                pct = int(recommended_pwm)
-                if pct < 0: pct = 0
-                if pct > 100: pct = 100
-                duty = int(round(pct * 255 / 100))
-                min_ivl = int(cfg.get("auto_apply_min_interval_s", 3) or 3)
-                hyst = int(cfg.get("auto_apply_hysteresis_duty", 5) or 5)
-                now_ts = time.time()
-                delta_ok = (_AUTO_LAST_DUTY is None) or (abs(duty - int(_AUTO_LAST_DUTY)) >= max(0, hyst))
-                ivl_ok = (_AUTO_LAST_TS is None) or ((now_ts - float(_AUTO_LAST_TS)) >= max(1, min_ivl))
-                if delta_ok and ivl_ok:
-                    res = serial_svc.serial_set_pwm_percent(pct)
-                    if res.get("ok"):
-                        auto_last_duty = duty
-                        auto_last_ts = now_ts
-                        _AUTO_LAST_DUTY = duty
-                        _AUTO_LAST_TS = now_ts
-                    else:
-                        auto_paused_msg = str(res.get("error") or "send failed")
-                        if dbg_should("auto_apply_send_failed", 30):
-                            log.warning("auto-apply send failed: %s", auto_paused_msg)
-        except Exception as e:
-            if dbg_should("auto_apply_error", 30):
-                log.warning("auto-apply error: %s", e)
-            auto_paused_msg = "auto-apply error"
+    controller_states = {}
+    pct = int(recommended_pwm)
+    if pct < 0: pct = 0
+    if pct > 100: pct = 100
+    duty = int(round(pct * 255 / 100))
+    min_ivl = int(cfg.get("auto_apply_min_interval_s", 3) or 3)
+    hyst = int(cfg.get("auto_apply_hysteresis_duty", 5) or 5)
+    now_ts = time.time()
+
+    controllers = cfg.get("controllers", [])
+    for ctrl in controllers:
+        cid = ctrl.get("id")
+        if not cid: continue
+
+        auto_last_duty = _AUTO_LAST_DUTY.get(cid)
+        auto_last_ts = _AUTO_LAST_TS.get(cid)
+        auto_paused_msg = None
+
+        if auto_enabled:
+            try:
+                sstat = serial_svc.get_serial_status(cid, full=False)
+                if not sstat.get("connected"):
+                    auto_paused_msg = "controller not connected"
+                    if dbg_should("auto_apply_disconnected_" + cid, 60):
+                        log.warning("auto-apply paused for %s: not connected", cid)
+                else:
+                    delta_ok = (auto_last_duty is None) or (abs(duty - int(auto_last_duty)) >= max(0, hyst))
+                    ivl_ok = (auto_last_ts is None) or ((now_ts - float(auto_last_ts)) >= max(1, min_ivl))
+                    if delta_ok and ivl_ok:
+                        res = serial_svc.serial_set_pwm_percent(cid, pct)
+                        if res.get("ok"):
+                            auto_last_duty = duty
+                            auto_last_ts = now_ts
+                            _AUTO_LAST_DUTY[cid] = duty
+                            _AUTO_LAST_TS[cid] = now_ts
+                        else:
+                            auto_paused_msg = str(res.get("error") or "send failed")
+                            if dbg_should("auto_apply_send_failed_" + cid, 30):
+                                log.warning("auto-apply send failed for %s: %s", cid, auto_paused_msg)
+            except Exception as e:
+                if dbg_should("auto_apply_error_" + cid, 30):
+                    log.warning("auto-apply error for %s: %s", cid, e)
+                auto_paused_msg = "auto-apply error"
+        
+        controller_states[cid] = {
+            "id": cid,
+            "type": ctrl.get("type", "official"),
+            "name": ctrl.get("name", cid),
+            "port": ctrl.get("port", ""),
+            "auto_last_duty": int(auto_last_duty) if auto_last_duty is not None else None,
+            "auto_last_ts": int(auto_last_ts) if auto_last_ts is not None else None,
+            "auto_paused": bool(auto_paused_msg),
+            "auto_message": auto_paused_msg,
+        }
 
     payload = {
         "drives": drives,
@@ -159,10 +176,7 @@ def compute_status(app_context: dict) -> dict:
         "disks_ini_mtime": disks_mtime,
         "disks_stale_warn_s": int(disks_stale_warn_sec),
         "auto_apply": auto_enabled,
-        "auto_last_duty": int(auto_last_duty) if auto_last_duty is not None else None,
-        "auto_last_ts": int(auto_last_ts) if auto_last_ts is not None else None,
-        "auto_paused": bool(auto_paused_msg),
-        "auto_message": auto_paused_msg,
+        "controllers": list(controller_states.values()),
         "auto_apply_min_interval_s": int(cfg.get("auto_apply_min_interval_s", 3) or 3),
         "auto_apply_hysteresis_duty": int(cfg.get("auto_apply_hysteresis_duty", 5) or 5),
     }
