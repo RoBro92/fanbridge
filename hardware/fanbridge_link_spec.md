@@ -32,20 +32,22 @@ The FanBridge Link is an ultra-compact, robust fan controller driven by an RP204
 > [!CAUTION]
 > **Ground Loop & Isolation Warning:** The RP2040 must be powered entirely from the USB-C 5V VBUS. The Fans must be powered entirely from the Molex 12V line. **DO NOT** connect the 5V VBUS from the USB to the 5V or 12V lines of the Molex connector. Only the **Ground planes** must be tied together. Failure to isolate the power rails will backfeed current into the Unraid host motherboard and destroy the USB controller.
 
-### 3.1 Tachometer (TACH) Protection Circuit
-PC Fan Tachometer pins are Open-Collector outputs. High-powered server fans (e.g., Deltas) often pull this pin up to 12V internally. Connecting this directly to the 3.3V-tolerant RP2040 will destroy the microcontroller.
+### 3.1 Tachometer (TACH) Protection & Debouncing
+PC Fan Tachometer pins are Open-Collector outputs. High-powered server fans (e.g., Deltas) often pull this pin up to 12V internally. Connecting this directly to the 3.3V-tolerant RP2040 will destroy the microcontroller. Furthermore, fan TACH signals are notoriously "noisy" and require debouncing.
+
+For a professional, commercial-grade board (similar to ATX PC motherboards), use a **Hex Schmitt-Trigger Inverter IC** (e.g., SN74LVC14A) to clean the signals before they reach the MCU.
 
 **Requirement per TACH channel:**
-- **Schottky Diode:** Place a Schottky diode (e.g., BAT54) in series between the Fan header and the RP2040 GPIO. (Cathode facing the fan, Anode facing the MCU).
-- **Pull-Up Resistor:** 10KΩ resistor pulling the MCU side of the diode up to 3.3V.
-- **Hardware Debounce:** 0.1µF capacitor between the MCU side of the diode and Ground to filter signal bouncing.
+- **Schottky Diode:** Place a Schottky diode (e.g., BAT54) in series with the Fan header to block 12V backfeeding. (Cathode facing the fan).
+- **Pull-Up & Filter:** A 10KΩ resistor pulling the MCU side of the diode to 3.3V, and a 0.1µF capacitor to Ground.
+- **Buffer IC:** Route the filtered signal through 1 channel of a **SN74LVC14A** (Hex Schmitt-Trigger Inverter). This IC will snap the noisy analog waveform into a perfectly crisp, debounced 3.3V digital square wave, completely offloading the filtering work from the RP2040 firmware.
 
 ```mermaid
 graph LR
-    Fan(Fan TACH Pin) -->|Open Collector| Diode[Schottky Diode]
-    Diode --> MCU(RP2040 GPIO)
-    3V[3.3V Rail] -->|10K Resistor| MCU
-    MCU -->|0.1µF Cap| GND[Ground]
+    Fan(Fan TACH) -->|Open Collector| Diode[Schottky Diode]
+    Diode --> Filter(10K Pull-Up + 0.1µF Cap)
+    Filter --> Buffer[SN74LVC14A Schmitt Trigger]
+    Buffer -->|Clean 3.3V Square Wave| MCU(RP2040 GPIO)
 ```
 
 ### 3.2 PWM Output Circuit
