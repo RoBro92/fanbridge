@@ -4,7 +4,9 @@
   <Overview><![CDATA[
   FanBridge is a lightweight Docker container that acts as a bridge between your Unraid server and an external RP2040 microcontroller. It intelligently reads your Unraid drive temperatures (HDD/SSD) and transmits them over USB serial, allowing the microcontroller to perfectly orchestrate your PWM fans.
   
-  Features include a beautiful dark-mode web UI, real-time temperature graphing, custom PWM curves, and seamless OTA firmware updates for your RP2040 controller directly from the dashboard.]]></Overview>
+  Perfect for if you have external JBODS that dont support fan control. 
+  
+  ]]></Overview>
   <Category>Utilities: System:Tools</Category>
   <Registry>https://github.com/RoBroLabs/fanbridge/pkgs/container/fanbridge</Registry>
   <Repository>ghcr.io/robrolabs/fanbridge:latest</Repository>
