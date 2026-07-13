@@ -13,11 +13,11 @@ The FanBridge Link is an ultra-compact, robust fan controller driven by an RP204
 
 ## 2. Core Bill of Materials (BOM) & Components
 
-*Note: For all passive SMD components (resistors, capacitors, LEDs), use **0603** or **0805** imperial sizes. They are the perfect sweet spot for automated pick-and-place assembly while remaining large enough for DIY hand-soldering repairs if necessary.*
+*Constraint:* For all passive SMD components, use **0603** or **0805** imperial sizes for optimal automated assembly and reworkability.
 
 | Component | Recommendation / Spec | Purpose |
 | :--- | :--- | :--- |
-| **Microcontroller** | RP2040 (or Raspberry Pi Pico module for rev 1) | Core logic, PWM generation, TACH counting, and USB serial comms. |
+| **Microcontroller** | RP2040 (QFN-56) | Core logic, PWM generation, TACH counting, and USB serial comms. |
 | **USB Interface** | USB-C Receptacle (SMD, 16-pin or 24-pin) | Host data connection and isolated 5V power for the RP2040 logic. Must include 5.1kΩ pull-down resistors on CC pins. |
 | **Power Input** | 4-Pin Molex (Through-hole, Right-Angle or Vertical) | Main power draw from JBOD PSU. Supplies 12V and 5V rails. |
 | **Fan Headers** | 6x 4-Pin PWM Fan Headers (Standard 2.54mm pitch) | Connects to 12V, GND, PWM (Output), and TACH (Input). |
@@ -25,8 +25,8 @@ The FanBridge Link is an ultra-compact, robust fan controller driven by an RP204
 | **Audible Alarm** | 1x SMD Piezo Buzzer (Active or Passive, 3.3V) | Physical audible alerts for dead fans or critical temperatures. |
 | **Status LEDs** | 3x System LEDs (Green, Blue, Yellow), 6x Fan LEDs (Red, 0603 SMD) | System LEDs for Power/Firmware status. Per-Fan Red LEDs for physical diagnostic fault alerts. |
 | **Expansion Headers** | 1x 4-Pin I2C (3.3V), 1x 3-Pin ARGB (5V) | I2C for external OLED screens. ARGB for external WS2812B server rack lighting. |
-| **Current Sensor** | INA180, INA219, or INA226 (with Shunt Resistor) | High-side current sensing to detect stalled fan motors or electrical shorts. |
-| **Polyfuse (PTC)** | 12V PTC Resettable Fuse (e.g., 10A hold) | Protects the board from catching fire if a fan cable severely shorts out. |
+| **Current Sensor** | INA219 (with Shunt Resistor) | High-side current and voltage sensing to detect stalled fan motors or failing PSUs. |
+| **Polyfuse (PTC)** | 12V PTC Resettable Fuse (e.g., 10A hold) | Short-circuit protection for the 12V Molex input. |
 
 ## 3. Critical Electrical Constraints
 
@@ -34,14 +34,12 @@ The FanBridge Link is an ultra-compact, robust fan controller driven by an RP204
 > **Ground Loop & Isolation Warning:** The RP2040 must be powered entirely from the USB-C 5V VBUS. The Fans must be powered entirely from the Molex 12V line. **DO NOT** connect the 5V VBUS from the USB to the 5V or 12V lines of the Molex connector. Only the **Ground planes** must be tied together. Failure to isolate the power rails will backfeed current into the Unraid host motherboard and destroy the USB controller.
 
 ### 3.1 Tachometer (TACH) Protection & Debouncing
-PC Fan Tachometer pins are Open-Collector outputs. High-powered server fans (e.g., Deltas) often pull this pin up to 12V internally. Connecting this directly to the 3.3V-tolerant RP2040 will destroy the microcontroller. Furthermore, fan TACH signals are notoriously "noisy" and require debouncing.
-
-For a professional, commercial-grade board (similar to ATX PC motherboards), use a **Hex Schmitt-Trigger Inverter IC** (e.g., SN74LVC14A) to clean the signals before they reach the MCU.
+PC Fan Tachometer pins are Open-Collector outputs and may pull up to 12V internally. TACH inputs require voltage clamping and hardware debouncing to protect the 3.3V RP2040 GPIOs.
 
 **Requirement per TACH channel:**
 - **Schottky Diode:** Place a Schottky diode (e.g., BAT54) in series with the Fan header to block 12V backfeeding. (Cathode facing the fan).
 - **Pull-Up & Filter:** A 10KΩ resistor pulling the MCU side of the diode to 3.3V, and a 0.1µF capacitor to Ground.
-- **Buffer IC:** Route the filtered signal through 1 channel of a **SN74LVC14APWR** (Hex Schmitt-Trigger Inverter, TSSOP-14 package for space savings). This IC will snap the noisy analog waveform into a perfectly crisp, debounced 3.3V digital square wave, completely offloading the filtering work from the RP2040 firmware.
+- **Buffer IC:** Route the filtered signal through 1 channel of a **SN74LVC14APWR** (Hex Schmitt-Trigger Inverter, TSSOP-14 package) to provide a debounced 3.3V digital square wave to the MCU.
 
 ```mermaid
 graph LR
@@ -56,30 +54,29 @@ The RP2040 outputs a 3.3V PWM signal. Intel's 4-pin PWM fan specification states
 - **Requirement:** Route the RP2040 PWM outputs directly to the Fan Headers. Include a small current-limiting series resistor (e.g., 220Ω - 1KΩ) on each PWM line to protect the MCU pins in case of a short circuit.
 
 ### 3.3 Power & Fault Monitoring (INA219)
-To prevent feature creep and minimize analog trace noise, all power telemetry is handled by a single digital I2C sensor rather than multiple ADC voltage dividers. 
+Power telemetry is handled exclusively by a digital I2C sensor.
 
 **Requirements:**
-- **Component:** Use a single **INA219** (e.g., INA219AIDCNR) placed at the main Molex 12V input.
-- **Combined Telemetry:** The INA219 simultaneously measures the **Bus Voltage** (to detect if the JBOD's 12V power supply is failing or dropping voltage under load) and the **Total Current** (Amps) drawn by the entire fan array.
-- **Fault Logic:** If the INA219 detects a massive current spike (e.g., from 1.5A to 5A) while any individual fan's tachometer drops to 0 RPM, the firmware deduces a locked-rotor motor stall and alerts the user.
-- **PTC Resettable Fuse (Polyfuse):** Place a 12V high-current Polyfuse (e.g., 10A hold / 20A trip) at the Molex 12V input. If a fan cable physically shorts out, the Polyfuse will trip and break the circuit before traces on the PCB melt.
+- **Component:** 1x **INA219** (e.g., INA219AIDCNR) at the Molex 12V input.
+- **Combined Telemetry:** The INA219 measures Bus Voltage (PSU health) and Total Current (Fan array draw).
+- **PTC Resettable Fuse (Polyfuse):** Place a 12V high-current Polyfuse (e.g., 10A hold / 20A trip) at the Molex 12V input for catastrophic short protection.
 
-### 3.4 Commercialization & Durability (Final Touches)
-For a premium commercial product that survives the hands of homelab users, the following must be included:
+### 3.4 Required Commercial Features
+The board must include the following for diagnostic and durability purposes:
 - **System Status LEDs (x3):** 
-  - **3.3V Logic Power (Green):** Hardwired to the 3.3V rail. Illuminates when the RP2040 is successfully receiving power from the USB LDO.
-  - **12V JBOD Power (Blue):** Hardwired to the 12V rail (use an appropriate resistor to handle 12V). Illuminates when the server PSU is actively feeding the Molex connector.
-  - **Firmware Status (Yellow):** Connected to a spare RP2040 GPIO. The firmware will pulse this LED (e.g., a "heartbeat" fade) to prove the microcontroller hasn't frozen and USB communication with Unraid is active.
-- **Per-Fan Diagnostic LEDs:** Place 6x tiny Red 0603 SMD LEDs physically next to their respective Fan Headers. Route them to 6 spare GPIO pins on the RP2040 (with current limiting resistors). The firmware will illuminate the LED solid RED if it detects a fan stall (PWM is requesting speed, but TACH reads 0 RPM), allowing users to instantly identify the dead fan in a dark chassis.
-- **ESD Protection (TVS Diodes):** Users carry static electricity. Place an ESD TVS Diode Array (e.g., USBLC6-2SC6) on the USB-C Data lines (D+/D-) right at the connector. Ensure the Schottky diodes on the Fan TACH lines are rated to absorb static shocks when users hot-plug fans.
-- **Physical Buttons:** The RP2040 requires a **BOOTSEL** tactile button (to pull the QSPI CS pin low during boot) to flash the initial firmware. A **RESET** tactile button (pulling the RUN pin low) is also highly recommended so users can reboot the microcontroller without unplugging the USB cable.
-- **Silkscreen Labelling:** The silkscreen must be extremely clear for the end-user. Label all headers ("FAN 1", "FAN 2", "12V MOLEX IN", "USB-C HOST"). Add the project logo/name and a hardware revision number (e.g., `REV 1.0`).
+  - **3.3V Logic Power (Green):** Hardwired to the 3.3V rail.
+  - **12V JBOD Power (Blue):** Hardwired to the 12V rail with appropriate current-limiting resistor.
+  - **Firmware Status (Yellow):** Routed to a spare RP2040 GPIO.
+- **Per-Fan Diagnostic LEDs:** 6x Red 0603 SMD LEDs placed adjacent to Fan Headers. Routed to 6 spare RP2040 GPIO pins.
+- **ESD Protection (TVS Diodes):** ESD TVS Diode Array (e.g., USBLC6-2SC6) on USB-C Data lines (D+/D-). Ensure Schottky diodes on TACH lines are rated for hot-plug static shocks.
+- **Physical Buttons:** **BOOTSEL** tactile button (pulls QSPI CS low) and **RESET** tactile button (pulls RUN low).
+- **Silkscreen Labelling:** Clearly label all headers ("FAN 1", "FAN 2", "12V IN", "USB-C"). Include hardware revision number (e.g., `REV 1.0`).
 
 ### 3.5 RP2040 Core Implementation Requirements
-This board will use the raw RP2040 silicon to maximize profit margins and eliminate reliance on third-party carrier modules. Your engineer must include the standard minimal viable RP2040 circuit:
-- **External Flash Memory:** The RP2040 has **zero** internal flash. Include an external QSPI Flash chip (e.g., Winbond W25Q16 2MB, or generic equivalent SOP-8) to store the firmware. *(Note: Using an 'Extended Part' for a $0.15 2MB flash chip with a $3 setup fee is significantly cheaper at volume than using a $2.00 'Basic Part' 16MB chip).*
-- **12MHz Crystal Oscillator:** USB communication requires high precision. You must include an external 12MHz crystal (e.g., SMD3225-4P, ±10ppm) and its associated load capacitors (e.g., 20pF-27pF depending on crystal spec).
-- **Decoupling Capacitors & LDO:** Ensure 0.1µF capacitors are placed as physically close to the RP2040's 3.3V power pins as possible. Provide a 3.3V LDO regulator to step down the USB 5V VBUS to power the logic.
+Design requires the raw RP2040 silicon. Include standard minimal viable RP2040 circuit (reference Raspberry Pi "Hardware Design with RP2040"):
+- **External Flash Memory:** 1x external QSPI Flash chip (e.g., Winbond W25Q16 2MB, or generic equivalent SOP-8). *Optimize BOM for 2MB SPI Flash rather than 16MB variants to minimize unit cost.*
+- **12MHz Crystal Oscillator:** 1x 12MHz crystal (e.g., SMD3225-4P, ±10ppm) with associated load capacitors (e.g., 20pF-27pF depending on crystal spec).
+- **Decoupling Capacitors & LDO:** 0.1µF capacitors placed closely to the RP2040 3.3V power pins. 1x 3.3V LDO regulator to step down USB 5V VBUS.
 
 ## 4. PCB Layout & Mechanical Spec
 
