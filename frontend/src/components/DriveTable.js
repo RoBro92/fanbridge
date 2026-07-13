@@ -47,22 +47,22 @@ export function updateDriveTable(data) {
     
     return `
       <tr style="border-bottom: 1px solid var(--glass-border);">
-        <td style="padding: 12px 8px;">\${d.dev} \${d.slot ? '<span style="color:var(--color-text-secondary); font-size:11px;">(' + d.slot + ')</span>' : ''}</td>
-        <td style="padding: 12px 8px;"><span style="background: \${typeBg}; color: \${typeColor}; padding: 2px 6px; border-radius: 4px; font-size: 11px;">\${d.type}</span></td>
-        <td style="padding: 12px 8px;">\${d.state || 'Unknown'}</td>
-        <td style="padding: 12px 8px;">\${d.temp !== null ? d.temp + '°C' : '--'}</td>
+        <td style="padding: 12px 8px;">${d.dev} ${d.slot ? '<span style="color:var(--color-text-secondary); font-size:11px;">(' + d.slot + ')</span>' : ''}</td>
+        <td style="padding: 12px 8px;"><span style="background: ${typeBg}; color: ${typeColor}; padding: 2px 6px; border-radius: 4px; font-size: 11px;">${d.type}</span></td>
+        <td style="padding: 12px 8px;">${d.state || 'Unknown'}</td>
+        <td style="padding: 12px 8px;">${d.temp !== null ? d.temp + '°C' : '--'}</td>
       </tr>
     `;
   }).join('');
 
   const formatStats = (stats) => {
     if (!stats || stats.cnt === 0) return 'N/A';
-    return `\${stats.avg} / \${stats.min} / \${stats.max}`;
+    return `${stats.avg} / ${stats.min} / ${stats.max}`;
   };
 
   summary.innerHTML = `
-    <span>HDD Avg/Min/Max: <strong style="color: var(--color-text-primary);">\${formatStats(data.hdd)}</strong></span>
-    <span>SSD Avg/Min/Max: <strong style="color: var(--color-text-primary);">\${formatStats(data.ssd)}</strong></span>
-    <span>Recommended PWM: <strong style="color: var(--color-accent); font-size: 14px;">\${data.recommended_pwm || 0}%</strong></span>
+    <span>HDD Avg/Min/Max: <strong style="color: var(--color-text-primary);">${formatStats(data.hdd)}</strong></span>
+    <span>SSD Avg/Min/Max: <strong style="color: var(--color-text-primary);">${formatStats(data.ssd)}</strong></span>
+    <span>Recommended PWM: <strong style="color: var(--color-accent); font-size: 14px;">${data.recommended_pwm || 0}%</strong></span>
   `;
 }
