@@ -1,3 +1,4 @@
+import { api } from '../api.js';
 import { initDriveTable } from './DriveTable.js';
 import { initSerialTools } from './SerialTools.js';
 import { initLogs, initLinkUpdates } from './LogsUpdater.js';
