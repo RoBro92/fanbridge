@@ -1,0 +1,69 @@
+:root {
+  /* Dark Theme (Default) */
+  --color-bg-base: hsl(220, 20%, 8%);
+  --color-bg-surface: hsl(220, 20%, 12%);
+  --color-bg-elevated: hsl(220, 20%, 16%);
+  --color-bg-inset: hsla(0, 0%, 0%, 0.2);
+  
+  --color-text-primary: hsl(0, 0%, 95%);
+  --color-text-secondary: hsl(220, 10%, 75%);
+  --color-text-muted: hsl(220, 10%, 60%);
+  
+  --color-accent: hsl(25, 95%, 53%); /* FanBridge Orange */
+  --color-accent-hover: hsl(25, 95%, 60%);
+  --color-accent-dim: hsla(25, 95%, 53%, 0.15);
+  
+  --color-border: hsla(0, 0%, 100%, 0.1);
+  --color-border-focus: hsla(25, 95%, 53%, 0.5);
+
+  --color-success: hsl(150, 60%, 45%);
+  --color-warning: hsl(40, 90%, 50%);
+  --color-error: hsl(0, 70%, 50%);
+
+  /* Glassmorphism Variables */
+  --glass-bg: hsla(220, 20%, 12%, 0.6);
+  --glass-border: hsla(0, 0%, 100%, 0.08);
+  --glass-blur: blur(12px);
+  --glass-shadow: 0 8px 32px 0 hsla(0, 0%, 0%, 0.37);
+
+  /* Layout Variables */
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  
+  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: 250ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+[data-theme="light"] {
+  /* Light Theme (Unraid Style) */
+  --color-bg-base: hsl(0, 0%, 96%);
+  --color-bg-surface: hsl(0, 0%, 100%);
+  --color-bg-elevated: hsl(0, 0%, 100%);
+  --color-bg-inset: hsla(0, 0%, 0%, 0.05);
+  
+  --color-text-primary: hsl(220, 20%, 12%);
+  --color-text-secondary: hsl(220, 10%, 35%);
+  --color-text-muted: hsl(220, 10%, 55%);
+  
+  --color-border: hsla(0, 0%, 0%, 0.15);
+  --color-border-focus: hsla(25, 95%, 53%, 0.5);
+
+  --glass-bg: hsla(0, 0%, 100%, 0.8);
+  --glass-border: hsla(0, 0%, 0%, 0.1);
+  --glass-shadow: 0 4px 16px 0 hsla(0, 0%, 0%, 0.1);
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--color-bg-base);
+  color: var(--color-text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+
+* {
+  box-sizing: border-box;
+}
