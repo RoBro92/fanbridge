@@ -21,7 +21,7 @@ The FanBridge Link is an ultra-compact, robust fan controller driven by an RP204
 | **USB Interface** | USB-C Receptacle (SMD, 16-pin or 24-pin) | Host data connection and isolated 5V power for the RP2040 logic. Must include 5.1kΩ pull-down resistors on CC pins. |
 | **Power Input** | 4-Pin Molex (Through-hole, Right-Angle or Vertical) | Main power draw from JBOD PSU. Supplies 12V and 5V rails. |
 | **Fan Headers** | 6x 4-Pin PWM Fan Headers (Standard 2.54mm pitch) | Connects to 12V, GND, PWM (Output), and TACH (Input). |
-| **Thermistor Header** | 1x 2-Pin Header (2.54mm pitch) | For an external 10K NTC Thermistor (Ambient intake temp measurement). |
+| **Temp Sensor Header** | 1x 3-Pin Header (2.54mm pitch) with 4.7KΩ Pull-up | For an external **DS18B20** Digital Temperature Sensor (Ambient intake temp). |
 | **Audible Alarm** | 1x SMD Piezo Buzzer (Active or Passive, 3.3V) | Physical audible alerts for dead fans or critical temperatures. |
 | **Status LEDs** | 2x 0603 or 0805 SMD LEDs (Blue, Green) | Diagnostic indicators for "USB Data Link" and "JBOD 12V Power Good". |
 | **Current Sensor** | INA180, INA219, or INA226 (with Shunt Resistor) | High-side current sensing to detect stalled fan motors or electrical shorts. |
