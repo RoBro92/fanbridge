@@ -970,7 +970,12 @@ def test_scoped_log_clear_preserves_other_log_streams():
             LOG_RING.extend(original)
 
 
-def test_remote_firmware_flash_requires_an_approved_release():
+def test_remote_firmware_flash_requires_an_approved_release(monkeypatch):
+    monkeypatch.setattr(
+        fanbridge,
+        "_latest_approved_diy_firmware",
+        lambda **_kwargs: (None, None),
+    )
     client, headers = _authenticated_client()
     response = client.post("/api/rp/flash", json={"cid": "primary"}, headers=headers)
     assert response.status_code == 404
