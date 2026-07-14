@@ -1,5 +1,6 @@
 import copy
 import json
+import logging
 import os
 from pathlib import Path
 import sys
@@ -73,6 +74,7 @@ def isolated_process_state(monkeypatch):
     monkeypatch.delenv("FANBRIDGE_DEV_SERIAL", raising=False)
     history = ModuleType("services.history")
     history.record_status = lambda *_args, **_kwargs: None
+    history.record_statuses = lambda *_args, **_kwargs: None
     monkeypatch.setitem(sys.modules, "services.history", history)
     yield
     pwm.reset_auto_state()
@@ -145,6 +147,22 @@ spundown = 1
     assert parsed[1]["temp_status"] == "spun_down"
     assert parsed[1]["state"] == "down"
     assert parsed[1]["temp"] is None
+
+
+def test_sysfs_running_transport_does_not_override_unraid_spindown(tmp_path, monkeypatch):
+    ini = tmp_path / "disks.ini"
+    ini.write_text(
+        "[parity]\ndevice=sdb\nname=parity\nrotational=1\ntemp=*\nspundown=1\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(disks, "_sysfs", lambda _dev, _rel: "running")
+
+    parsed, quality = disks.read_unraid_disks_with_status(str(ini), set())
+
+    assert quality["ok"] is True
+    assert parsed[0]["spun_down"] is True
+    assert parsed[0]["state"] == "down"
+    assert parsed[0]["temp_status"] == "spun_down"
 
 
 def test_unraid_parser_rejects_unsafe_device_names(tmp_path, monkeypatch):
@@ -228,6 +246,7 @@ spundown = 0
     parsed, quality = disks.read_unraid_disks_with_status(str(ini), set())
 
     assert quality["ok"] is True
+    assert parsed[0]["slot"] == "disk1"
     assert parsed[0]["serial"] == "WDC_WD100EFAX-SERIAL123"
     assert parsed[0]["capacity_bytes"] == 9766436812 * 1024
 
@@ -554,15 +573,136 @@ def test_disabling_auto_apply_sends_one_immediate_safe_stop(tmp_path, monkeypatc
     assert second["controllers"][0]["auto_last_percent"] == 100
 
 
-def test_history_uses_null_for_missing_temperature_classes(tmp_path, monkeypatch):
-    recorded: list[tuple[int | None, int | None, int]] = []
+def test_manual_mode_ignores_curves_and_refreshes_the_saved_setpoint(tmp_path, monkeypatch):
+    config = copy.deepcopy(BASE_CONFIG)
+    config["controllers"] = [{
+        "id": "left",
+        "name": "Left",
+        "port": "/dev/ttyACM0",
+        "control_mode": "manual",
+        "manual_pwm": 55,
+    }]
+    config["drive_assignments"] = {"sda": "left"}
+    # The legacy aggregate flag may remain true while another controller is
+    # automatic; the selected controller's explicit mode must win.
+    config["auto_apply"] = True
+    sends: list[tuple[str, int]] = []
+    recorded: list[list[tuple[str, int | None, int | None, int]]] = []
     history = ModuleType("services.history")
-    history.record_status = lambda hdd, ssd, duty: recorded.append((hdd, ssd, duty))
+    history.record_statuses = lambda rows: recorded.append(list(rows))
+    monkeypatch.setitem(sys.modules, "services.history", history)
+    monkeypatch.setattr(
+        pwm.serial_svc,
+        "get_serial_status",
+        lambda _cid, full=False: {"connected": True},
+    )
+    monkeypatch.setattr(
+        pwm.serial_svc,
+        "serial_set_pwm_percent",
+        lambda cid, value: sends.append((cid, value)) or {"ok": True},
+    )
+    start = time.time()
+
+    first = compute_with_source(
+        tmp_path, [drive("sda", 44)], cfg=config, now=start, mtime=start
+    )
+    compute_with_source(
+        tmp_path, [drive("sda", 44)], cfg=config, now=start + 10, mtime=start
+    )
+    compute_with_source(
+        tmp_path, [drive("sda", 44)], cfg=config, now=start + 21, mtime=start
+    )
+
+    controller = first["controllers"][0]
+    assert controller["recommended_pwm"] == 80
+    assert controller["control_mode"] == "manual"
+    assert controller["manual_pwm"] == 55
+    assert controller["output_target_percent"] == 55
+    assert sends == [("left", 55), ("left", 55)]
+    assert all(rows[1][0] == "left" and rows[1][3] == 55 for rows in recorded)
+
+
+def test_manual_mode_forces_100_at_critical_temperature_until_hysteresis_clears(tmp_path, monkeypatch):
+    config = copy.deepcopy(BASE_CONFIG)
+    config["single_override_hdd_c"] = 45
+    config["controllers"] = [{
+        "id": "left",
+        "name": "Left",
+        "port": "/dev/ttyACM0",
+        "control_mode": "manual",
+        "manual_pwm": 0,
+    }]
+    config["drive_assignments"] = {"sda": "left"}
+    sends = []
+    monkeypatch.setattr(
+        pwm.serial_svc,
+        "get_serial_status",
+        lambda _cid, full=False: {"connected": True},
+    )
+    monkeypatch.setattr(
+        pwm.serial_svc,
+        "serial_set_pwm_percent",
+        lambda cid, value: sends.append((cid, value)) or {"ok": True},
+    )
+    start = time.time()
+
+    critical = compute_with_source(
+        tmp_path, [drive("sda", 45)], cfg=config, now=start, mtime=start
+    )
+    hysteresis = compute_with_source(
+        tmp_path, [drive("sda", 43)], cfg=config, now=start + 10, mtime=start
+    )
+    cleared = compute_with_source(
+        tmp_path, [drive("sda", 41)], cfg=config, now=start + 21, mtime=start
+    )
+
+    assert critical["controllers"][0]["manual_safety_override_active"] is True
+    assert critical["controllers"][0]["output_target_percent"] == 100
+    assert hysteresis["controllers"][0]["manual_safety_reason"] == "thermal_hysteresis"
+    assert hysteresis["controllers"][0]["output_target_percent"] == 100
+    assert cleared["controllers"][0]["manual_safety_override_active"] is False
+    assert cleared["controllers"][0]["output_target_percent"] == 0
+    assert sends == [("left", 100), ("left", 0)]
+
+
+def test_mode_change_is_acknowledged_even_when_target_is_unchanged(tmp_path, monkeypatch, caplog):
+    config = copy.deepcopy(BASE_CONFIG)
+    config["controllers"] = [{
+        "id": "left", "name": "Left", "port": "/dev/ttyACM0",
+        "control_mode": "manual", "manual_pwm": 100,
+    }]
+    sends = []
+    monkeypatch.setattr(
+        pwm.serial_svc,
+        "get_serial_status",
+        lambda _cid, full=False: {"connected": True},
+    )
+    monkeypatch.setattr(
+        pwm.serial_svc,
+        "serial_set_pwm_percent",
+        lambda cid, value: sends.append((cid, value)) or {"ok": True},
+    )
+    caplog.set_level(logging.INFO)
+    start = time.time()
+
+    compute_with_source(tmp_path, [], cfg=config, now=start, mtime=start)
+    config["controllers"][0]["control_mode"] = "auto"
+    config["fallback_pwm"] = 100
+    compute_with_source(tmp_path, [], cfg=config, now=start + 1, mtime=start)
+
+    assert sends == [("left", 100), ("left", 100)]
+    assert "mode=automatic | target=100% | reason=mode_change" in caplog.text
+
+
+def test_history_uses_null_for_missing_temperature_classes(tmp_path, monkeypatch):
+    recorded: list[list[tuple[str, int | None, int | None, int]]] = []
+    history = ModuleType("services.history")
+    history.record_statuses = lambda rows: recorded.append(list(rows))
     monkeypatch.setitem(sys.modules, "services.history", history)
 
     compute_with_source(tmp_path, [drive("sda", 37)])
 
-    assert recorded == [(37, None, 30)]
+    assert recorded == [[("", 37, None, 30)]]
 
 
 class FakeSerial:
@@ -787,6 +927,47 @@ def test_serial_expected_reply_cannot_succeed_silently(monkeypatch):
     assert result["error"] == "no reply from controller"
 
 
+def test_operator_serial_event_records_confirmed_reply_at_normal_level(caplog):
+    caplog.set_level(logging.INFO)
+
+    serial_svc.record_operator_transaction(
+        "left",
+        "PING\nforged",
+        {"ok": True, "reply": "PONG\x1b[31m\nforged"},
+    )
+
+    message = caplog.records[-1].getMessage()
+    assert caplog.records[-1].levelno == logging.INFO
+    assert "cid=left" in message
+    assert "TX PING forged" in message
+    assert "RX PONG?[31m forged" in message
+    assert "\n" not in message
+
+
+def test_operator_status_event_is_summarised_instead_of_logging_raw_json(caplog):
+    caplog.set_level(logging.INFO)
+    reply = json.dumps({
+        "fw": "2.5.2",
+        "board": "rp2040-zero",
+        "controller_uid": "50443405884d8d1c",
+        "setpoint_pct": 100,
+        "applied_pwm_pct": 100.0,
+        "failsafe_active": False,
+        "control_age_ms": 1234,
+        "control_lease_ms": 60000,
+        "capabilities": ["pwm.single", "failsafe.lease", "identify.led"],
+    })
+
+    serial_svc.record_operator_transaction(
+        "left", "STATUS", {"ok": True, "reply": reply}
+    )
+
+    message = caplog.records[-1].getMessage()
+    assert "RX STATUS fw=2.5.2; board=rp2040-zero" in message
+    assert "setpoint=100%; applied=100.0%; failsafe=off" in message
+    assert '"capabilities"' not in message
+
+
 def test_serial_exceptions_are_logged_but_return_bounded_public_errors(monkeypatch, caplog):
     sentinel = "SENTINEL stack /private/device/path"
 
@@ -931,6 +1112,9 @@ def test_serial_registration_deduplicates_physical_aliases(tmp_path):
 
 def test_serial_discovery_hides_dev_pseudoterminals_by_default(monkeypatch):
     candidates = {
+        "/host-dev/serial/by-id/*": [],
+        "/host-dev/ttyACM*": [],
+        "/host-dev/ttyUSB*": [],
         "/dev/serial/by-id/*": ["/dev/serial/by-id/fanbridge"],
         "/dev/ttyACM*": ["/dev/ttyACM0"],
         "/dev/ttyUSB*": [],

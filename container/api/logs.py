@@ -1,10 +1,17 @@
 from flask import Blueprint, jsonify, request, make_response
-import datetime, time, os, sys
+import datetime, time, os, sys, re
 from core.logging_setup import LOG_RING as _LOG_RING, LOG_LOCK as _LOG_LOCK
 from services import serial as serial_svc
 from flask import current_app
 
 bp = Blueprint("logs", __name__)
+_CID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+_LOG_SCOPES = {"all", "system", "controller"}
+_CONTROLLER_MARKER_RE = re.compile(
+    r'(?:\b[a-z_]*cid=[a-z][a-z0-9_-]{0,31}\b|'
+    r'\[[a-z][a-z0-9_-]{0,31}\]|'
+    r'"controller"\s*:\s*"[a-z][a-z0-9_-]{0,31}")'
+)
 
 _LEVELS = {
     "DEBUG": 10,
@@ -14,6 +21,38 @@ _LEVELS = {
     "ERROR": 40,
     "CRITICAL": 50,
 }
+
+
+def _controller_message_matches(message: object, cid: str = "") -> bool:
+    text = str(message or "")
+    if not cid:
+        return bool(_CONTROLLER_MARKER_RE.search(text))
+    escaped = re.escape(cid)
+    return bool(re.search(
+        rf'(?:\b[a-z_]*cid={escaped}\b|\[{escaped}\]|'
+        rf'"controller"\s*:\s*"{escaped}")',
+        text,
+    ))
+
+
+def _parse_log_scope(*, cid: str = "") -> tuple[str, str | None]:
+    scope = (request.args.get("scope") or ("controller" if cid else "all")).strip().lower()
+    if scope not in _LOG_SCOPES:
+        return scope, "invalid log scope"
+    if scope == "controller" and not cid:
+        return scope, "controller id required for controller log scope"
+    if scope == "system" and cid:
+        return scope, "controller id is not valid for system log scope"
+    return scope, None
+
+
+def _item_in_scope(item: dict, scope: str, cid: str = "") -> bool:
+    message = item.get("msg")
+    if scope == "system":
+        return not _controller_message_matches(message)
+    if scope == "controller":
+        return _controller_message_matches(message, cid)
+    return True
 
 
 @bp.get("/logs")
@@ -30,6 +69,12 @@ def api_logs():
     except Exception:
         since = 0
     min_level = _LEVELS.get((request.args.get("min_level") or "").upper(), 10)
+    cid = (request.args.get("cid") or "").strip()
+    if cid and not _CID_RE.fullmatch(cid):
+        return jsonify({"ok": False, "error": "invalid controller id"}), 400
+    scope, scope_error = _parse_log_scope(cid=cid)
+    if scope_error:
+        return jsonify({"ok": False, "error": scope_error}), 400
     try:
         limit = max(1, min(1000, int(request.args.get("limit", "500") or "500")))
     except Exception:
@@ -54,6 +99,8 @@ def api_logs():
         for it in reversed(src):
             if since and int(it.get("id", 0)) <= int(since):
                 break
+            if not _item_in_scope(it, scope, cid):
+                continue
             lvl = it.get("level", "INFO")
             if _LEVELS.get(str(lvl).upper(), 10) < int(min_level):
                 continue
@@ -97,26 +144,56 @@ def api_log_level():
 
 @bp.post("/logs/clear")
 def api_logs_clear():
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({"ok": False, "error": "JSON object required"}), 400
+    scope = str(data.get("scope") or "all").strip().lower()
+    cid = str(data.get("cid") or "").strip()
+    if scope not in _LOG_SCOPES:
+        return jsonify({"ok": False, "error": "invalid log scope"}), 400
+    if cid and not _CID_RE.fullmatch(cid):
+        return jsonify({"ok": False, "error": "invalid controller id"}), 400
+    if scope == "controller" and not cid:
+        return jsonify({"ok": False, "error": "controller id required for controller log scope"}), 400
+    if scope == "system" and cid:
+        return jsonify({"ok": False, "error": "controller id is not valid for system log scope"}), 400
+
+    def _clear_scope() -> None:
+        if scope == "all":
+            _LOG_RING.clear()  # type: ignore[attr-defined]
+            return
+        retained = [item for item in _LOG_RING if not _item_in_scope(item, scope, cid)]
+        _LOG_RING.clear()  # type: ignore[attr-defined]
+        _LOG_RING.extend(retained)  # type: ignore[attr-defined]
+
     try:
         if _LOG_LOCK is not None:
             with _LOG_LOCK:
-                _LOG_RING.clear()  # type: ignore[attr-defined]
+                _clear_scope()
         else:
-            _LOG_RING.clear()  # type: ignore[attr-defined]
+            _clear_scope()
         return jsonify({"ok": True})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+    except Exception:
+        current_app.logger.exception("failed to clear application log ring")
+        return jsonify({"ok": False, "error": "could not clear logs"}), 500
 
 
 @bp.get("/logs/download")
 def api_logs_download():
     # Accept both fmt and format for compatibility with older UI code
     fmt = request.args.get("format") or request.args.get("fmt") or "text"
+    requested_cid = (request.args.get("cid") or "").strip()
+    if requested_cid and not _CID_RE.fullmatch(requested_cid):
+        return jsonify({"ok": False, "error": "invalid controller id"}), 400
+    scope, scope_error = _parse_log_scope(cid=requested_cid)
+    if scope_error:
+        return jsonify({"ok": False, "error": scope_error}), 400
     try:
         src = list(_LOG_RING) if isinstance(_LOG_RING, list) else list(_LOG_RING)
     except Exception:
         src = []
 
+    src = [item for item in src if _item_in_scope(item, scope, requested_cid)]
     items = src[-500:] if fmt != "json" else src
 
     # Build diagnostics bundle
@@ -155,7 +232,7 @@ def api_logs_download():
             info["env"] = {key: os.environ[key] for key in sorted(safe_env) if key in os.environ}
         except Exception:
             info["env"] = {}
-        cid = (request.args.get("cid") or "").strip()
+        cid = requested_cid
         if cid:
             try:
                 info["serial_status"] = serial_svc.get_serial_status(cid, full=True)
@@ -206,14 +283,15 @@ def api_logs_download():
             pass
         try:
             ss = diagnostics.get('serial_status', {}) or {}
-            lines.append("Serial:")
-            lines.append(f"  connected={ss.get('connected')} preferred={ss.get('preferred')} baud={ss.get('baud')} message={ss.get('message')}")
-            ports = ss.get('ports') or []
-            if ports:
-                lines.append(f"  ports: {', '.join(ports[:12])}{' ...' if len(ports)>12 else ''}")
-            cv = diagnostics.get('controller_version_reply')
-            if cv:
-                lines.append(f"  controller version: {cv}")
+            if requested_cid:
+                lines.append("Serial:")
+                lines.append(f"  connected={ss.get('connected')} preferred={ss.get('preferred')} baud={ss.get('baud')} message={ss.get('message')}")
+                ports = ss.get('ports') or []
+                if ports:
+                    lines.append(f"  ports: {', '.join(ports[:12])}{' ...' if len(ports)>12 else ''}")
+                cv = diagnostics.get('controller_version_reply')
+                if cv:
+                    lines.append(f"  controller version: {cv}")
         except Exception:
             pass
         lines.append("==== End Diagnostics ====")

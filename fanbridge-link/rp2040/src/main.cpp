@@ -17,7 +17,7 @@ static mbed::PwmOut* fanPwm = nullptr;
 
 // --------------------------------------------------------------------------------------
 // Firmware info
-static const char* FW_VERSION = "2.5.0";
+static const char* FW_VERSION = "2.5.2";
 static const uint8_t PROTOCOL_VERSION = 2;
 static const char* BOARD_ID = "rp2040-zero";
 #if defined(ARDUINO_ARCH_RP2040)
@@ -61,7 +61,10 @@ static bool identifyActive = false;
 static bool identifyLedOn = false;
 static unsigned long identifyStartedAt = 0;
 static unsigned long identifyLastToggleAt = 0;
-static Adafruit_NeoPixel identifyLed(1, IDENTIFY_LED_PIN, NEO_GRB + NEO_KHZ800);
+// Adafruit_NeoPixel's RP2040 constructor claims a PIO state machine. Construct
+// it only after the Arduino/Mbed runtime and USB CDC are up; doing that from a
+// global constructor can touch PIO before the platform has initialized.
+static Adafruit_NeoPixel* identifyLed = nullptr;
 
 static void loadControllerUid() {
 #if defined(ARDUINO_ARCH_RP2040)
@@ -85,15 +88,19 @@ static void printControllerDisplayName() {
 
 static void setIdentifyLed(bool enabled) {
   identifyLedOn = enabled;
-  identifyLed.setPixelColor(0, enabled ? identifyLed.Color(255, 72, 0) : 0);
-  identifyLed.show();
+  if (!identifyLed) return;
+  identifyLed->setPixelColor(0, enabled ? identifyLed->Color(255, 72, 0) : 0);
+  identifyLed->show();
 }
 
 static void setupIdentifyLed() {
-  identifyLed.begin();
-  identifyLed.setBrightness(32);
-  identifyLed.clear();
-  identifyLed.show();
+  if (!identifyLed) {
+    identifyLed = new Adafruit_NeoPixel(1, IDENTIFY_LED_PIN, NEO_GRB + NEO_KHZ800);
+  }
+  identifyLed->begin();
+  identifyLed->setBrightness(32);
+  identifyLed->clear();
+  identifyLed->show();
 }
 
 static void startIdentify() {
@@ -357,17 +364,23 @@ void setup() {
   // the fan PWM input when application firmware is not executing.
   setupPwm();
   setFanPercent(START_PERCENT, false);
-  // The Pico SDK derives this persistent board identity from the unique ID of
-  // the flash device permanently paired with this RP2040 board.
-  loadControllerUid();
-  startHardwareWatchdog();
-  setupIdentifyLed();
 
+  // Bring up USB before starting the hardware watchdog. Arduino Mbed's CDC
+  // initialisation may wait for descriptor negotiation; starting a four-second
+  // watchdog first can reset the RP2040 in the middle of enumeration and leave
+  // the host reporting repeated descriptor timeouts.
   Serial.begin(115200);
   const uint32_t t0 = millis();
   while (!Serial && (millis() - t0 < 2000)) {
-    serviceHardwareWatchdog();
+    delay(10);
   }
+
+  // The Pico SDK derives this persistent board identity from the unique ID of
+  // the flash device permanently paired with this RP2040 board. Keep all
+  // non-essential peripherals out of the USB-critical startup path.
+  loadControllerUid();
+  setupIdentifyLed();
+  startHardwareWatchdog();
   if (DO_SPINUP && START_PERCENT > 0) {
     setFanPercent(100, true);
     safeDelay(SPINUP_MS);
@@ -377,7 +390,7 @@ void setup() {
   printControllerDisplayName(); Serial.print(' '); Serial.print(FW_VERSION);
   Serial.println(F(" ready @115200 (PWM-only)"));
   Serial.println(F("Commands: VERSION, PING, RPM, UPTIME, STATUS, IDENTIFY, TEST, BOOTSEL, 0..100"));
-  
+
   // No lease exists at startup.  START_PERCENT is already the safe fallback;
   // STATUS/PING/diagnostic traffic intentionally does not create a lease.
   hasReceivedControl = false;

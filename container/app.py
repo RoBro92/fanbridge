@@ -1,6 +1,6 @@
 from flask import Flask, jsonify, request, render_template, session, redirect, url_for, make_response, g
 import atexit, os, time, yaml, glob, pathlib, logging, sys, datetime, secrets
-import copy, re, tempfile, threading
+import copy, re, tempfile, threading, hashlib, shutil, struct, subprocess
 from typing import Protocol, runtime_checkable
 from services import serial as serial_svc
 from api.serial import bp as serial_bp
@@ -21,6 +21,9 @@ except Exception:
 
 _BASE = pathlib.Path(__file__).resolve().parent
 _PROJECT_ROOT = _BASE.parent 
+PASSWORD_MIN_LENGTH = 8
+PASSWORD_MAX_LENGTH = 256
+_SETUP_TOKEN_BANNER_WRITTEN = False
 
 
 @runtime_checkable
@@ -87,6 +90,29 @@ def _setup_token_path() -> pathlib.Path:
     return (_BASE / "setup.token") if not _in_docker() else pathlib.Path("/config/setup.token")
 
 
+def _write_setup_token_banner(token: str) -> None:
+    global _SETUP_TOKEN_BANNER_WRITTEN
+    if _SETUP_TOKEN_BANNER_WRITTEN:
+        return
+    _SETUP_TOKEN_BANNER_WRITTEN = True
+
+    width = max(72, len(token) + 4)
+    inner_width = width - 4
+
+    def banner_row(text: str = "") -> str:
+        return f"| {text:<{inner_width}} |\n"
+
+    sys.stderr.write("\n+" + ("=" * (width - 2)) + "+\n")
+    sys.stderr.write(banner_row("FANBRIDGE FIRST RUN SETUP TOKEN"))
+    sys.stderr.write("+" + ("-" * (width - 2)) + "+\n")
+    sys.stderr.write(banner_row(token))
+    sys.stderr.write("+" + ("-" * (width - 2)) + "+\n")
+    sys.stderr.write(banner_row("Enter this token on the first run setup screen."))
+    sys.stderr.write(banner_row("A copy is stored at /config/setup.token until setup is complete."))
+    sys.stderr.write("+" + ("=" * (width - 2)) + "+\n\n")
+    sys.stderr.flush()
+
+
 def _load_or_create_setup_token() -> str:
     """Return the one-time first-run token without exposing it over HTTP."""
     configured = os.environ.get("FANBRIDGE_SETUP_TOKEN", "").strip()
@@ -97,6 +123,7 @@ def _load_or_create_setup_token() -> str:
         token = path.read_text(encoding="utf-8").strip()
         if token:
             os.chmod(path, 0o600)
+            _write_setup_token_banner(token)
             return token
     path.parent.mkdir(parents=True, exist_ok=True)
     token = secrets.token_urlsafe(24)
@@ -111,8 +138,7 @@ def _load_or_create_setup_token() -> str:
     os.chmod(path, 0o600)
     # Write only to the container console. The application ring buffer is
     # downloadable as a support bundle and must never retain this credential.
-    sys.stderr.write(f"FanBridge first-run setup token: {token}\n")
-    sys.stderr.flush()
+    _write_setup_token_banner(token)
     return token
 
 # Local-only default serial port for macOS RP2040 testing
@@ -147,6 +173,7 @@ from core.logging_setup import (
     setup_logging as _setup_logging,
     ensure_handlers as _ensure_log_handlers,
 )
+from core.http import http_get_firmware_asset, http_get_json
 
 _setup_logging()
 log = logging.getLogger("fanbridge")
@@ -563,6 +590,7 @@ _CONTROLLER_NAME_MAX = 24
 _CONFIG_DEVICE_KEY_RE = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
 _CONFIG_ALLOWED_BAUDS = {9600, 19200, 38400, 57600, 115200, 230400}
 _CONFIG_PORT_PREFIXES = (
+    "/host-dev/serial/by-id/", "/host-dev/ttyACM", "/host-dev/ttyUSB",
     "/dev/serial/by-id/", "/dev/ttyACM", "/dev/ttyUSB",
     "/dev/cu.usbmodem", "/dev/tty.usbmodem", "/tmp/ttyFAN",  # nosec B108 - explicit dev mode
 )
@@ -657,6 +685,17 @@ def _normalise_config(value: dict) -> dict:
                 "port": port,
                 "baud": baud,
             }
+            control_mode = str(raw.get("control_mode") or "").strip().lower()
+            if control_mode in {"auto", "manual"}:
+                controller["control_mode"] = control_mode
+            raw_manual_pwm = raw.get("manual_pwm")
+            if not isinstance(raw_manual_pwm, bool):
+                try:
+                    manual_pwm = int(raw_manual_pwm)
+                except (TypeError, ValueError):
+                    manual_pwm = None
+                if manual_pwm is not None and 0 <= manual_pwm <= 100:
+                    controller["manual_pwm"] = manual_pwm
             if hardware_uid:
                 controller["hardware_uid"] = hardware_uid
                 seen_hardware_uids.add(hardware_uid)
@@ -796,6 +835,97 @@ def save_config(cfg: dict):
     if wake is not None:
         wake.set()
 
+
+def _configured_controller_mode(controller: dict, legacy_auto: bool) -> str:
+    mode = str(controller.get("control_mode") or "").strip().lower()
+    if mode in {"auto", "manual"}:
+        return mode
+    return "auto" if legacy_auto else "manual"
+
+
+def _manual_safety_for_snapshot(cid: str, requested_percent: int) -> tuple[bool, str | None]:
+    """Return whether the latest trusted temperature state requires 100%."""
+    if requested_percent >= 100:
+        return False, None
+    try:
+        control = _control_summary(include_snapshot=True)
+        snapshot = control.pop("snapshot", None)
+        if not _control_is_healthy(control) or not isinstance(snapshot, dict):
+            return True, "control_state_unavailable"
+        controller = next((
+            item for item in snapshot.get("controllers", [])
+            if isinstance(item, dict) and item.get("id") == cid
+        ), None)
+        if controller is None:
+            return True, "controller_temperature_state_unavailable"
+        if controller.get("safety_state") == "failsafe":
+            return True, str(controller.get("control_reason") or "temperature_failsafe")
+        if controller.get("override") is True or controller.get("manual_safety_override_active") is True:
+            return True, str(controller.get("manual_safety_reason") or controller.get("control_reason") or "critical_temperature")
+        return False, None
+    except Exception:
+        return True, "control_state_unavailable"
+
+
+def _set_manual_pwm(cid: str, value) -> dict:
+    """Persist manual ownership before issuing its immediate setpoint."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return {"ok": False, "error": "invalid value"}
+    try:
+        if isinstance(value, float) and not value.is_integer():
+            raise ValueError
+        percent = int(value)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "invalid value"}
+    if percent < 0 or percent > 100:
+        return {"ok": False, "error": "PWM percent must be between 0 and 100"}
+
+    # Serialize the mode transition with the complete control cycle. Otherwise
+    # a cycle that already read an Auto snapshot could write its curve target
+    # immediately after this request writes the manual target.
+    with _CONTROL_CYCLE_LOCK:
+        with _MUTATION_LOCK:
+            config = load_config()
+            controller = next((
+                item for item in config.get("controllers", [])
+                if isinstance(item, dict) and item.get("id") == cid
+            ), None)
+            if controller is None:
+                return {"ok": False, "error": "unknown controller id"}
+            controller["control_mode"] = "manual"
+            controller["manual_pwm"] = percent
+            legacy_auto = config.get("auto_apply") is True
+            config["auto_apply"] = any(
+                _configured_controller_mode(item, legacy_auto) == "auto"
+                for item in config.get("controllers", [])
+                if isinstance(item, dict)
+            )
+            save_config(config)
+
+        safety_override, safety_reason = _manual_safety_for_snapshot(cid, percent)
+        applied_percent = 100 if safety_override else percent
+        result = dict(serial_svc.serial_set_pwm_percent(cid, applied_percent))
+    result["requested_value"] = percent
+    result["safety_override"] = safety_override
+    result["safety_reason"] = safety_reason
+    serial_svc.record_operator_transaction(cid, str(applied_percent), result)
+    if safety_override:
+        log.warning(
+            "manual thermal safety blocked lower output | cid=%s | requested=%s%% | applied=100%% | reason=%s",
+            cid,
+            percent,
+            safety_reason,
+        )
+    if result.get("ok"):
+        _audit(
+            "manual_pwm.set",
+            controller=cid,
+            requested=percent,
+            applied=applied_percent,
+            safety_override=safety_override,
+        )
+    return result
+
 load_config()
 
     
@@ -862,6 +992,7 @@ _CONTROL_STATE: dict = {
     "last_error": None,
     "snapshot": None,
 }
+app.config["FB_SET_MANUAL_PWM"] = _set_manual_pwm
 
 
 def _adopt_persistent_controller_identity(cid: str, identity: dict | None) -> str | None:
@@ -1045,16 +1176,43 @@ def api_auto_apply():
     enable = data.get("enabled")
     if not isinstance(enable, bool):
         return jsonify({"ok": False, "error": "enabled must be a boolean"}), 400
-    c = load_config()
-    c["auto_apply"] = enable
-    save_config(c)
+    cid = data.get("cid")
+    if cid is not None and (not isinstance(cid, str) or not _CONTROLLER_ID_RE.fullmatch(cid)):
+        return jsonify({"ok": False, "error": "valid cid is required"}), 400
+    with _CONTROL_CYCLE_LOCK:
+        c = load_config()
+        controllers = [item for item in c.get("controllers", []) if isinstance(item, dict)]
+        legacy_auto = c.get("auto_apply") is True
+        if cid is None:
+            # Compatibility for older clients: a global toggle changes every
+            # controller. New clients always provide the selected controller ID.
+            for controller in controllers:
+                controller["control_mode"] = "auto" if enable else "manual"
+                if not enable:
+                    controller.setdefault("manual_pwm", 100)
+        else:
+            controller = next((item for item in controllers if item.get("id") == cid), None)
+            if controller is None:
+                return jsonify({"ok": False, "error": "controller not found"}), 404
+            controller["control_mode"] = "auto" if enable else "manual"
+            if not enable:
+                controller.setdefault("manual_pwm", 100)
+        c["auto_apply"] = any(
+            _configured_controller_mode(controller, legacy_auto) == "auto"
+            for controller in controllers
+        )
+        save_config(c)
     _CONTROL_WAKE.set()
     try:
-        _audit("auto_apply.toggle", enabled=enable)
+        _audit("auto_apply.toggle", controller=cid or "all", enabled=enable)
     except Exception:
         pass
-    # If disabling, do not clear last duty/time so UI can display history
-    return jsonify({"ok": True, "auto_apply": enable})
+    return jsonify({
+        "ok": True,
+        "cid": cid,
+        "control_mode": "auto" if enable else "manual",
+        "auto_apply": c["auto_apply"],
+    })
 
 ## moved: /api/logs*, /api/log_level handled by api.logs blueprint
 
@@ -1118,7 +1276,15 @@ def _req_log(resp):
             lg.warning("%s %s -> %s in %sms", meth, path, code, dur_ms)
         else:
             # Success paths: skip logging for chatty endpoints entirely
-            QUIET = ("/health", "/api/status", "/api/serial/status", "/api/logs", "/api/log_level", "/api/logs/download")
+            QUIET = (
+                "/health",
+                "/api/status",
+                "/api/serial/status",
+                "/api/logs",
+                "/api/logs/clear",
+                "/api/log_level",
+                "/api/logs/download",
+            )
             if path in QUIET:
                 pass
             else:
@@ -1233,6 +1399,9 @@ def _auth_and_rate():
     elif p == "/api/ports/identify":
         key = "controller_identify"
         limit, window = 10, 60
+    elif p in ("/api/rp/flash", "/api/rp/flash_upload"):
+        key = "firmware_update"
+        limit, window = 3, 600
     elif p in ("/api/settings", "/api/curves", "/api/reset_defaults", "/api/exclude", "/api/change_password"):
         key = p  # separate buckets for config endpoints
         limit, window = 30, 60
@@ -1280,12 +1449,12 @@ def login():
             supplied_setup_token = request.form.get("setup_token") or ""
             if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", username):
                 return render_template("login.html", first_run=True, error="Username must use letters, numbers, '.', '_' or '-'.", csrf_token=_ensure_csrf_token())
-            if len(password) < 12 or len(password) > 256 or password != confirm:
-                return render_template("login.html", first_run=True, error="Use a password of at least 12 characters and enter it twice.", csrf_token=_ensure_csrf_token())
+            if len(password) < PASSWORD_MIN_LENGTH or len(password) > PASSWORD_MAX_LENGTH or password != confirm:
+                return render_template("login.html", first_run=True, error="Use a password of at least 8 characters and enter it twice.", csrf_token=_ensure_csrf_token())
             expected_setup_token = _load_or_create_setup_token()
             if not secrets.compare_digest(supplied_setup_token, expected_setup_token):
                 _audit("auth.setup_rejected", username=username)
-                return render_template("login.html", first_run=True, error="The one-time setup token is incorrect. Check the container log.", csrf_token=_ensure_csrf_token()), 403
+                return render_template("login.html", first_run=True, error="The one time setup token is incorrect. Check the container log.", csrf_token=_ensure_csrf_token()), 403
             # Re-read under the write lock so two first-run requests cannot
             # both claim the installation.
             with _USERS_LOCK:
@@ -1407,7 +1576,14 @@ def history():
     except ValueError:
         hours = 1
     hours = max(1, min(720, hours))
-    return jsonify({"ok": True, "history": get_history(hours)})
+    cid = (request.args.get("cid") or "").strip()
+    if cid and not _CONTROLLER_ID_RE.fullmatch(cid):
+        return jsonify({"ok": False, "error": "invalid controller id"}), 400
+    if cid:
+        config = load_config()
+        if not any(item.get("id") == cid for item in config.get("controllers", [])):
+            return jsonify({"ok": False, "error": "controller not found"}), 404
+    return jsonify({"ok": True, "cid": cid or None, "history": get_history(hours, cid)})
 
 
 
@@ -1422,6 +1598,7 @@ def _valid_controller_port(port: str) -> bool:
     if not port or len(port) > 256 or "\x00" in port:
         return False
     allowed_prefixes = (
+        "/host-dev/serial/by-id/", "/host-dev/ttyACM", "/host-dev/ttyUSB",
         "/dev/serial/by-id/", "/dev/ttyACM", "/dev/ttyUSB",
         "/dev/cu.usbmodem", "/dev/tty.usbmodem",
     )
@@ -1577,7 +1754,9 @@ def add_controller():
         "name": cname or cid,
         "type": ctype,
         "port": cport,
-        "baud": cbaud
+        "baud": cbaud,
+        "control_mode": "manual",
+        "manual_pwm": 100,
     }
     if hardware_uid:
         new_c["hardware_uid"] = hardware_uid
@@ -1664,6 +1843,157 @@ def delete_controller(cid):
 
 
 # --------- API: Controller firmware status ---------
+_FIRMWARE_FLASH_LOCK = threading.Lock()
+_FIRMWARE_RELEASE_LOCK = threading.Lock()
+_FIRMWARE_RELEASE_CACHE: dict = {
+    "expires_at": 0.0,
+    "release": None,
+    "error": None,
+}
+_FIRMWARE_RELEASE_CACHE_SECONDS = 300
+_FIRMWARE_MIN_REMOTE_VERSION = (2, 5, 0)
+_UF2_MAGIC_START_0 = 0x0A324655
+_UF2_MAGIC_START_1 = 0x9E5D5157
+_UF2_MAGIC_END = 0x0AB16F30
+_UF2_FLAG_FAMILY_ID = 0x00002000
+_RP2040_FAMILY_ID = 0xE48BFF56
+
+
+def _firmware_version_tuple(value: object) -> tuple[int, int, int]:
+    match = re.fullmatch(r"v?([0-9]+)\.([0-9]+)\.([0-9]+)", str(value or "").strip())
+    if not match:
+        return (0, 0, 0)
+    return tuple(int(part) for part in match.groups())
+
+
+def _latest_approved_diy_firmware(*, refresh: bool = False) -> tuple[dict | None, str | None]:
+    """Return the newest HIL-gated DIY release with a checksum companion."""
+    now = time.monotonic()
+    with _FIRMWARE_RELEASE_LOCK:
+        if not refresh and now < float(_FIRMWARE_RELEASE_CACHE.get("expires_at") or 0):
+            return _FIRMWARE_RELEASE_CACHE.get("release"), _FIRMWARE_RELEASE_CACHE.get("error")
+
+        releases = http_get_json(
+            "https://api.github.com/repos/RoBroLabs/fanbridge/releases?per_page=30",
+            timeout=6.0,
+        )
+        approved: list[dict] = []
+        error = None
+        if not isinstance(releases, list):
+            error = "Firmware release service is unavailable."
+        else:
+            for release in releases:
+                if not isinstance(release, dict) or release.get("draft") or release.get("prerelease"):
+                    continue
+                tag = str(release.get("tag_name") or "")
+                tag_match = re.fullmatch(r"fw-v([0-9]+\.[0-9]+\.[0-9]+)", tag)
+                if not tag_match:
+                    continue
+                version = tag_match.group(1)
+                version_tuple = _firmware_version_tuple(version)
+                if version_tuple < _FIRMWARE_MIN_REMOTE_VERSION:
+                    continue
+                expected_asset = f"fanbridge-rp2040-{version}.uf2"
+                expected_checksum = f"{expected_asset}.sha256"
+                asset_names = {
+                    str(asset.get("name") or "")
+                    for asset in (release.get("assets") or [])
+                    if isinstance(asset, dict)
+                }
+                # The protected release workflow publishes both files only
+                # after the matching hardware-in-the-loop approval is set.
+                if expected_asset not in asset_names or expected_checksum not in asset_names:
+                    continue
+                base = f"https://github.com/RoBroLabs/fanbridge/releases/download/{tag}"
+                approved.append({
+                    "version": version,
+                    "version_tuple": version_tuple,
+                    "tag": tag,
+                    "asset": expected_asset,
+                    "asset_url": f"{base}/{expected_asset}",
+                    "checksum_url": f"{base}/{expected_checksum}",
+                })
+
+        selected = max(approved, key=lambda item: item["version_tuple"], default=None)
+        _FIRMWARE_RELEASE_CACHE.update({
+            "expires_at": now + _FIRMWARE_RELEASE_CACHE_SECONDS,
+            "release": selected,
+            "error": error,
+        })
+        return selected, error
+
+
+def _validate_rp2040_uf2(path: str) -> tuple[bool, str, str | None]:
+    try:
+        size = os.path.getsize(path)
+        if size < 512 or size > 4 * 1024 * 1024 or size % 512:
+            return False, "UF2 must contain complete 512-byte blocks and be no larger than 4 MiB", None
+        digest = hashlib.sha256()
+        expected_blocks = size // 512
+        seen: set[int] = set()
+        with open(path, "rb") as stream:
+            for _ in range(expected_blocks):
+                block = stream.read(512)
+                digest.update(block)
+                magic0, magic1, flags, _target, payload_size, block_no, num_blocks, family = struct.unpack_from(
+                    "<IIIIIIII", block, 0
+                )
+                end_magic = struct.unpack_from("<I", block, 508)[0]
+                if magic0 != _UF2_MAGIC_START_0 or magic1 != _UF2_MAGIC_START_1 or end_magic != _UF2_MAGIC_END:
+                    return False, "file is not a valid UF2 image", None
+                if payload_size <= 0 or payload_size > 476:
+                    return False, "UF2 contains an invalid payload block", None
+                if num_blocks != expected_blocks or block_no >= expected_blocks or block_no in seen:
+                    return False, "UF2 block numbering is incomplete or inconsistent", None
+                if not flags & _UF2_FLAG_FAMILY_ID or family != _RP2040_FAMILY_ID:
+                    return False, "UF2 is not marked for the RP2040 device family", None
+                seen.add(block_no)
+        if len(seen) != expected_blocks:
+            return False, "UF2 image is incomplete", None
+        return True, "ok", digest.hexdigest()
+    except (OSError, struct.error):
+        return False, "UF2 image could not be validated", None
+
+
+def _bootsel_usb_selector(location: str | None, timeout: float = 20.0) -> tuple[int, int] | None:
+    value = str(location or "").strip()
+    valid_location = bool(re.fullmatch(r"[0-9]+-[0-9]+(?:\.[0-9]+)*(?::[0-9]+\.[0-9]+)?", value))
+    device_name = value.split(":", 1)[0] if valid_location else ""
+    usb_root = pathlib.Path("/sys/bus/usb/devices")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        candidates = [usb_root / device_name] if device_name else []
+        if not candidates:
+            candidates = [path.parent for path in usb_root.glob("*/idVendor")]
+        matches = []
+        for base in candidates:
+            try:
+                vendor = (base / "idVendor").read_text(encoding="ascii").strip().lower()
+                product = (base / "idProduct").read_text(encoding="ascii").strip().lower()
+                if vendor == "2e8a" and product == "0003":
+                    bus = int((base / "busnum").read_text(encoding="ascii").strip())
+                    address = int((base / "devnum").read_text(encoding="ascii").strip())
+                    matches.append((bus, address))
+            except (OSError, ValueError):
+                continue
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            return None
+        time.sleep(0.25)
+    return None
+
+
+def _firmware_flash_availability(controller: dict) -> tuple[bool, str | None]:
+    if controller.get("type") != "diy":
+        return False, "Firmware upload is currently available only for DIY RP2040 controllers."
+    if not shutil.which("picotool"):
+        return False, "The container image does not include picotool."
+    if not os.path.isdir("/dev/bus/usb"):
+        return False, "Map /dev/bus/usb into the container and allow USB character devices."
+    return True, None
+
+
 @app.get("/api/rp/status")
 def api_rp_status():
     cid = (request.args.get("cid") or "").strip()
@@ -1689,6 +2019,40 @@ def api_rp_status():
     identity = serial_status.get("identity")
     if not isinstance(identity, dict):
         identity = {}
+    version = version or (str(identity.get("version") or "").strip() or None)
+    flash_enabled, flash_reason = _firmware_flash_availability(controller)
+    serial_code = (
+        "connected" if serial_status.get("connected") else
+        "firmware_update_required" if identity.get("legacy") else
+        "device_unavailable" if not serial_status.get("available") else
+        "identity_unverified"
+    )
+    serial_status = {**serial_status, "code": serial_code}
+    release, release_error = _latest_approved_diy_firmware(
+        refresh=request.args.get("refresh") == "1",
+    )
+    latest_version = str(release.get("version")) if release else None
+    current_version = _firmware_version_tuple(version)
+    latest_tuple = release.get("version_tuple") if release else None
+    update_available = bool(
+        controller.get("type") == "diy"
+        and release
+        and (current_version == (0, 0, 0) or latest_tuple > current_version)
+    )
+    if controller.get("type") != "diy":
+        remote_message = "Remote firmware releases are not available for this controller type."
+    elif release_error:
+        remote_message = release_error
+    elif not release:
+        remote_message = "No hardware-approved remote firmware release is published yet."
+    elif not flash_enabled:
+        remote_message = flash_reason or "Docker USB firmware access is not configured."
+    elif update_available:
+        remote_message = f"Firmware {latest_version} is verified and ready to install."
+    elif current_version > latest_tuple:
+        remote_message = "This controller is newer than the latest approved remote release."
+    else:
+        remote_message = "This controller is running the latest approved firmware."
 
     return jsonify({
         "ok": True,
@@ -1700,37 +2064,251 @@ def api_rp_status():
         "channel_count": identity.get("channels"),
         "serial": serial_status,
         "usb": _usb_info_for_port(serial_status.get("preferred")),
-        "firmware_flash_enabled": False,
-        "manual_update_only": True,
+        "firmware_flash_enabled": flash_enabled,
+        "flash_unavailable_reason": flash_reason,
+        "latest_version": latest_version,
+        "remote_update_available": update_available,
+        "remote_install_enabled": bool(update_available and flash_enabled),
+        "remote_update_message": remote_message,
     })
-
-
-def _firmware_update_disabled():
-    return jsonify({
-        "ok": False,
-        "error": "in-app firmware flashing is disabled and its implementation was removed; use the checksum-verified manual procedure",
-    }), 403
 
 
 # Retain small compatibility stubs so older clients receive an explicit answer.
 @app.post("/api/rp/repo")
 def api_rp_repo():
-    return _firmware_update_disabled()
+    return jsonify({
+        "ok": False,
+        "error": "custom firmware repositories are not supported",
+    }), 403
 
 
 @app.post("/api/rp/rp2_device")
 def api_rp_set_device():
-    return _firmware_update_disabled()
+    return jsonify({
+        "ok": False,
+        "error": "firmware targets are selected from the registered controller identity",
+    }), 403
+
+
+def _flash_validated_rp2040(
+    cid: str,
+    temp_path: str,
+    digest: str,
+    *,
+    source: str,
+    release_version: str | None = None,
+) -> tuple[dict, int]:
+    prepared = serial_svc.enter_diy_bootsel(cid)
+    if not prepared.get("ok"):
+        log.warning("firmware update preparation failed | cid=%s error=%s", cid, prepared.get("error"))
+        return {"ok": False, "error": "controller could not safely enter firmware update mode"}, 409
+
+    selector = _bootsel_usb_selector(prepared.get("usb_location"))
+    if not selector:
+        return {
+            "ok": False,
+            "error": "RP2040 BOOTSEL device was not uniquely visible through the Docker USB mapping",
+        }, 503
+    bus, address = selector
+    picotool = shutil.which("picotool")
+    if not picotool:
+        return {"ok": False, "error": "picotool is unavailable"}, 503
+    command = [
+        picotool, "load", "-v", "-x", temp_path,
+        "--bus", str(bus), "--address", str(address),
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=45,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        log.error("picotool timed out | cid=%s digest=%s", cid, digest[:12])
+        return {"ok": False, "error": "firmware writer timed out; controller remains in BOOTSEL mode"}, 504
+    if completed.returncode != 0:
+        log.error(
+            "picotool failed | cid=%s code=%s output=%s",
+            cid,
+            completed.returncode,
+            (completed.stdout or "")[-1000:],
+        )
+        return {"ok": False, "error": "firmware writer rejected the UF2 image"}, 502
+
+    verified_identity = None
+    installed_version = None
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        status = serial_svc.get_serial_status(cid, full=False)
+        if status.get("connected"):
+            identity = status.get("identity")
+            if isinstance(identity, dict) and int(identity.get("protocol") or 0) >= 2:
+                verified_identity = identity
+                version_result = serial_svc.serial_send_line(cid, "VERSION", expect_reply=True, timeout=0.6)
+                if version_result.get("ok"):
+                    installed_version = str(version_result.get("reply") or "").strip() or None
+                break
+        time.sleep(0.5)
+
+    if verified_identity:
+        _adopt_persistent_controller_identity(cid, verified_identity)
+    _CONTROL_WAKE.set()
+    _audit(
+        f"firmware.{source}",
+        controller=cid,
+        sha256=digest[:16],
+        verified=bool(verified_identity),
+        version=installed_version,
+        release_version=release_version,
+    )
+    return {
+        "ok": True,
+        "cid": cid,
+        "sha256": digest,
+        "source": source,
+        "release_version": release_version,
+        "verified": bool(verified_identity),
+        "controller_version": installed_version,
+        "message": (
+            "firmware flashed and controller identity verified"
+            if verified_identity else
+            "firmware flashed, but the serial controller did not reconnect before the verification timeout"
+        ),
+    }, 200
 
 
 @app.post("/api/rp/flash")
 def api_rp_flash():
-    return _firmware_update_disabled()
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({"ok": False, "error": "JSON object required"}), 400
+    cid = str(data.get("cid") or "").strip()
+    if not _CONTROLLER_ID_RE.fullmatch(cid):
+        return jsonify({"ok": False, "error": "valid cid parameter required"}), 400
+    config = load_config()
+    controller = next(
+        (item for item in config.get("controllers", []) if item.get("id") == cid),
+        None,
+    )
+    if not controller:
+        return jsonify({"ok": False, "error": "controller not found"}), 404
+    release, release_error = _latest_approved_diy_firmware(refresh=True)
+    if release_error:
+        return jsonify({"ok": False, "error": release_error}), 503
+    if not release:
+        return jsonify({"ok": False, "error": "no hardware-approved remote firmware release is published"}), 409
+    requested_version = str(data.get("version") or "").strip()
+    if requested_version and requested_version != release["version"]:
+        return jsonify({"ok": False, "error": "the selected firmware release is no longer current"}), 409
+    flash_enabled, flash_reason = _firmware_flash_availability(controller)
+    if not flash_enabled:
+        return jsonify({"ok": False, "error": flash_reason or "firmware update is unavailable"}), 503
+    if not _FIRMWARE_FLASH_LOCK.acquire(blocking=False):
+        return jsonify({"ok": False, "error": "another firmware update is already running"}), 409
+
+    temp_path = None
+    try:
+        checksum_data = http_get_firmware_asset(
+            release["checksum_url"],
+            max_bytes=1024,
+            timeout=10.0,
+        )
+        firmware_data = http_get_firmware_asset(
+            release["asset_url"],
+            max_bytes=4 * 1024 * 1024,
+            timeout=30.0,
+        )
+        if checksum_data is None or firmware_data is None:
+            return jsonify({"ok": False, "error": "approved firmware assets could not be downloaded"}), 503
+        try:
+            checksum_text = checksum_data.decode("ascii").strip()
+        except UnicodeDecodeError:
+            return jsonify({"ok": False, "error": "firmware checksum file is invalid"}), 502
+        checksum_match = re.fullmatch(
+            rf"([A-Fa-f0-9]{{64}})\s+\*?{re.escape(release['asset'])}",
+            checksum_text,
+        )
+        if not checksum_match:
+            return jsonify({"ok": False, "error": "firmware checksum file is invalid"}), 502
+
+        descriptor, temp_path = tempfile.mkstemp(prefix="fanbridge-rp2040-remote-", suffix=".uf2")
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(firmware_data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temp_path, 0o600)
+        valid, validation_error, digest = _validate_rp2040_uf2(temp_path)
+        if not valid or not digest:
+            return jsonify({"ok": False, "error": validation_error}), 502
+        if not secrets.compare_digest(digest.lower(), checksum_match.group(1).lower()):
+            return jsonify({"ok": False, "error": "firmware checksum verification failed"}), 502
+        payload, status = _flash_validated_rp2040(
+            cid,
+            temp_path,
+            digest,
+            source="remote",
+            release_version=release["version"],
+        )
+        return jsonify(payload), status
+    finally:
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        _FIRMWARE_FLASH_LOCK.release()
 
 
 @app.post("/api/rp/flash_upload")
 def api_rp_flash_upload():
-    return _firmware_update_disabled()
+    cid = (request.form.get("cid") or "").strip()
+    if not _CONTROLLER_ID_RE.fullmatch(cid):
+        return jsonify({"ok": False, "error": "valid cid parameter required"}), 400
+    config = load_config()
+    controller = next(
+        (item for item in config.get("controllers", []) if item.get("id") == cid),
+        None,
+    )
+    if not controller:
+        return jsonify({"ok": False, "error": "controller not found"}), 404
+    flash_enabled, flash_reason = _firmware_flash_availability(controller)
+    if not flash_enabled:
+        return jsonify({"ok": False, "error": flash_reason or "firmware upload is unavailable"}), 503
+
+    upload = request.files.get("firmware")
+    filename = str(getattr(upload, "filename", "") or "")
+    if upload is None or not filename.lower().endswith(".uf2"):
+        return jsonify({"ok": False, "error": "select an RP2040 .uf2 firmware file"}), 400
+    if not _FIRMWARE_FLASH_LOCK.acquire(blocking=False):
+        return jsonify({"ok": False, "error": "another firmware update is already running"}), 409
+
+    temp_path = None
+    try:
+        descriptor, temp_path = tempfile.mkstemp(prefix="fanbridge-rp2040-", suffix=".uf2")
+        os.close(descriptor)
+        os.chmod(temp_path, 0o600)
+        upload.save(temp_path)
+        valid, validation_error, digest = _validate_rp2040_uf2(temp_path)
+        if not valid or not digest:
+            return jsonify({"ok": False, "error": validation_error}), 400
+        payload, status = _flash_validated_rp2040(
+            cid,
+            temp_path,
+            digest,
+            source="upload",
+        )
+        return jsonify(payload), status
+    finally:
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        _FIRMWARE_FLASH_LOCK.release()
 
 
 # --------- API: Exclude device ---------
@@ -1785,8 +2363,8 @@ def api_change_password():
         return jsonify({"ok": False, "error": "all fields required"}), 400
     if new != confirm:
         return jsonify({"ok": False, "error": "passwords do not match"}), 400
-    if len(new) < 12 or len(new) > 256:
-        return jsonify({"ok": False, "error": "new password must be 12-256 characters"}), 400
+    if len(new) < PASSWORD_MIN_LENGTH or len(new) > PASSWORD_MAX_LENGTH:
+        return jsonify({"ok": False, "error": "new password must be 8 to 256 characters"}), 400
 
     users = _load_users()
     stored = _user_hash(users, str(user))
@@ -2123,6 +2701,13 @@ def _safe_stop_registered_controllers_on_exit() -> None:
 
 if _in_docker():
     atexit.register(_safe_stop_registered_controllers_on_exit)
+    try:
+        users = _load_users()
+        if not users.get("users"):
+            _load_or_create_setup_token()
+    except Exception as exc:
+        log.error("Unable to initialise first run setup token: %s", exc)
+        raise
 
 
 _start_control_loop()

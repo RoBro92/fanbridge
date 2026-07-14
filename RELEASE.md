@@ -1,6 +1,34 @@
-Version: 1.3.0
+Version: 1.4.0
 
 # Changelog
+
+## 1.4.0 — 2026-07-14
+
+Control and safety
+
+- Made manual mode authoritative over controller curves while retaining a mandatory thermal safety override for critical, missing, or stale active-drive telemetry.
+- Added controller-acknowledged PWM state, safer automatic/manual transitions, lease refreshes, and clearer audit events for the requested and applied output.
+- Bound controller history, graph data, assignments, names, and settings to the selected controller instead of demo or global fallback data.
+- Improved persistent RP2040 UID rebinding so a registered controller retains its configuration after USB path changes.
+
+Operations and firmware
+
+- Replaced placeholder controller and system logs with live, scoped output and added structured serial TX/RX presentation, filtering, downloads, and runtime log-level controls.
+- Added a non-privileged DIY RP2040 firmware panel with device information, remote approved-release checks, SHA-256 verification, verified local UF2 upload, BOOTSEL transition, `picotool` flashing, and post-update identity validation.
+- Added firmware 2.5.2 source with safer USB startup ordering, persistent `DIY-RP2040-xxxx` identity, full hardware UID reporting, LED identification, a 60-second control lease, and watchdog-backed full-speed fallback.
+- Added real disk role, serial, capacity, state, and sortable drive-assignment columns; spun-down disks now display as `Down`.
+
+Interface and deployment
+
+- Refined the permanent sidebar, controller settings layout, version/update presentation, controller-name limits, Add Controller workflow, and official/DIY capability-specific dashboards.
+- Updated the Unraid template for hotplug-aware `/host-dev` discovery and non-privileged RP2040 firmware access through `/dev/bus/usb` and narrowly scoped device rules.
+- Expanded backend control, security, firmware, history, and logging tests and rebuilt the production frontend assets.
+
+Upgrade notes
+
+- Pull `ghcr.io/robrolabs/fanbridge:latest`, then review the updated Unraid template before using in-app firmware updates. Existing configurations are retained.
+- DIY remote installation requires an approved final `fw-v2.5.2` release containing both the target-specific UF2 and matching SHA-256 asset.
+- The six-channel FanBridge Link custom PCB remains a separate, unreleased hardware target and must not use the DIY RP2040 firmware.
 
 ## 1.3.0 — 2026-07-14
 
@@ -111,7 +139,7 @@ Fixes
   - Make logging ring buffer resilient to server reconfiguration and re‑attach handler at startup.
   - Logs API now returns `last_id` and current `level`, and accepts `format=` as well as `fmt` for downloads.
   - UI uses `last_id` to advance cursor and shows runtime level correctly.
- 
+
 Other
 - Footer order updated and Support link points to the Unraid forum thread.
 

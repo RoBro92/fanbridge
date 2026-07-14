@@ -1,5 +1,7 @@
 {
   "schema_version": 2,
+  "deprecated": true,
   "items": [],
-  "notice": "No firmware is currently approved for in-app installation. Publish the hardware-validated 2.5.0 safety, persistent-identity, and LED-identify firmware with its SHA-256 digest before adding a release entry. Use the verified manual update procedure in fanbridge-link/README.md."
+  "release_source": "https://github.com/RoBroLabs/fanbridge/releases",
+  "notice": "Compatibility placeholder only. FanBridge discovers approved DIY firmware from final GitHub releases that contain both the target-specific UF2 and matching SHA-256 asset."
 }

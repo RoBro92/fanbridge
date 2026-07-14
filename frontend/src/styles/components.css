@@ -48,6 +48,345 @@
   border-color: var(--color-accent-hover);
 }
 
+.btn:disabled,
+.btn:disabled:hover {
+  cursor: not-allowed;
+  opacity: 0.48;
+  transform: none;
+}
+
+/* Controller firmware workspace */
+.firmware-panel {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  animation: firmware-panel-enter 180ms ease-out both;
+}
+
+.firmware-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.firmware-panel__header h3,
+.firmware-section h4 {
+  margin: 0;
+}
+
+.firmware-panel__header h3 {
+  font-size: 16px;
+}
+
+.firmware-connection {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.firmware-connection::before {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  content: '';
+}
+
+.firmware-connection[data-state='connected'] {
+  color: var(--color-success);
+}
+
+.firmware-connection[data-state='connected']::before {
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-success) 14%, transparent);
+}
+
+.firmware-connection[data-state='disconnected'] {
+  color: var(--color-error);
+}
+
+.firmware-section {
+  min-width: 0;
+}
+
+.firmware-section h4 {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  letter-spacing: 1.15px;
+  text-transform: uppercase;
+}
+
+.firmware-section--management {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  padding-top: 18px;
+  border-top: 1px solid var(--color-border);
+}
+
+.firmware-section__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.firmware-check-button,
+.firmware-copy {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--color-accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0;
+}
+
+.firmware-check-button:hover,
+.firmware-copy:hover {
+  color: var(--color-accent-hover);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.firmware-check-button:disabled,
+.firmware-copy:disabled {
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+  text-decoration: none;
+}
+
+.firmware-check-button.is-loading::after {
+  display: inline-block;
+  margin-left: 6px;
+  content: '↻';
+  animation: firmware-spin 700ms linear infinite;
+}
+
+.firmware-device-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.65fr);
+  gap: 0 18px;
+  margin: 10px 0 0;
+}
+
+.firmware-device-field {
+  min-width: 0;
+  padding: 10px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+}
+
+.firmware-device-field dt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.firmware-device-field dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.firmware-device-field--port dd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+.firmware-release-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  padding: 12px 0;
+}
+
+.firmware-release-row div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.firmware-release-row span {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.firmware-release-row strong {
+  color: var(--color-text-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.firmware-release-message {
+  min-height: 34px;
+  margin: 0 0 12px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.firmware-install-button {
+  width: 100%;
+  min-height: 40px;
+}
+
+.firmware-action-separator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+}
+
+.firmware-action-separator::before,
+.firmware-action-separator::after {
+  flex: 1;
+  height: 1px;
+  background: var(--color-border);
+  content: '';
+}
+
+.firmware-upload {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 70px;
+  padding: 12px 16px;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-bg-inset) 72%, transparent);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast), transform var(--transition-fast);
+}
+
+.firmware-upload:hover {
+  transform: translateY(-1px);
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 7%, var(--color-bg-inset));
+}
+
+.firmware-upload.is-disabled,
+.firmware-upload.is-disabled:hover {
+  transform: none;
+  border-color: var(--color-border);
+  background: var(--color-bg-inset);
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.firmware-upload input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.firmware-upload svg {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: var(--color-accent);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.firmware-upload span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.firmware-upload strong {
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.firmware-upload small {
+  color: var(--color-text-muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.firmware-operation-status {
+  min-height: 34px;
+  margin: 12px 0 0;
+  padding: 9px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-inset);
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.firmware-operation-status[data-tone='working'],
+.firmware-operation-status[data-tone='warning'] {
+  color: var(--color-warning);
+}
+
+.firmware-operation-status[data-tone='success'] {
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 8%, var(--color-bg-inset));
+}
+
+.firmware-operation-status[data-tone='error'] {
+  color: var(--color-error);
+  background: color-mix(in srgb, var(--color-error) 8%, var(--color-bg-inset));
+}
+
+@keyframes firmware-panel-enter {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes firmware-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 560px) {
+  .firmware-device-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .firmware-panel,
+  .firmware-check-button.is-loading::after {
+    animation: none;
+  }
+}
+
 /* Custom Checkboxes */
 input[type="checkbox"].custom-checkbox {
   appearance: none;
@@ -110,6 +449,47 @@ h1, h2, h3, h4, h5, h6 {
 }
 .text-secondary {
   color: var(--color-text-secondary);
+}
+
+.table-sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.table-sort-button::after {
+  content: '↕';
+  opacity: 0.35;
+  font-size: 11px;
+}
+
+th[aria-sort='ascending'] .table-sort-button::after {
+  content: '↑';
+  opacity: 1;
+  color: var(--color-primary);
+}
+
+th[aria-sort='descending'] .table-sort-button::after {
+  content: '↓';
+  opacity: 1;
+  color: var(--color-primary);
+}
+
+.table-sort-button:hover,
+.table-sort-button:focus-visible {
+  color: var(--color-text-primary);
+  background: color-mix(in srgb, var(--color-primary) 8%, transparent);
+  outline: none;
 }
 
 /* Premium Status Pips */

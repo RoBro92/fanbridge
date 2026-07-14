@@ -5,7 +5,7 @@ export function initDriveTable(container) {
         <span>Assigned Drives</span>
         <button class="btn" id="btn-rescan-drives" style="font-size: 12px; padding: 4px 12px;">Rescan Drives</button>
       </h3>
-      
+
       <div style="overflow-x: auto;">
         <table style="width: 100%; border-collapse: collapse; font-size: 14px; text-align: left;">
           <thead>
@@ -21,7 +21,7 @@ export function initDriveTable(container) {
           </tbody>
         </table>
       </div>
-      
+
       <div id="drive-summary" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--glass-border); display: flex; justify-content: space-between; font-size: 12px; color: var(--color-text-secondary);">
         <!-- Dynamically populated -->
       </div>
@@ -44,7 +44,7 @@ export function updateDriveTable(data) {
     const isHDD = d.type === 'HDD';
     const typeColor = isHDD ? '#7dd3fc' : '#d8b4fe';
     const typeBg = isHDD ? 'hsla(200, 50%, 50%, 0.2)' : 'hsla(280, 50%, 50%, 0.2)';
-    
+
     return `
       <tr style="border-bottom: 1px solid var(--glass-border);">
         <td style="padding: 12px 8px;">${d.dev} ${d.slot ? '<span style="color:var(--color-text-secondary); font-size:11px;">(' + d.slot + ')</span>' : ''}</td>

@@ -17,7 +17,8 @@ from services import serial as serial_svc
 _AUTO_LAST_PERCENT: dict[str, int] = {}
 _AUTO_LAST_TS: dict[str, float] = {}
 _AUTO_CONNECTED: dict[str, bool] = {}
-_AUTO_SAFE_STOP_SENT: set[str] = set()
+_AUTO_LAST_MODE: dict[str, bool] = {}
+_MANUAL_SAFETY_LATCHED: dict[str, bool] = {}
 
 
 def reset_auto_state() -> None:
@@ -25,7 +26,8 @@ def reset_auto_state() -> None:
     _AUTO_LAST_PERCENT.clear()
     _AUTO_LAST_TS.clear()
     _AUTO_CONNECTED.clear()
-    _AUTO_SAFE_STOP_SENT.clear()
+    _AUTO_LAST_MODE.clear()
+    _MANUAL_SAFETY_LATCHED.clear()
 
 
 def _int_value(value: Any, default: int) -> int:
@@ -259,10 +261,57 @@ def _canonical_auto_settings(cfg: dict) -> tuple[int, int, int]:
     return min_interval, refresh_interval, hysteresis_percent
 
 
+def _manual_safety_state(
+    cid: str,
+    configured_mode: str,
+    policy: dict,
+    cfg: dict,
+    log: logging.Logger,
+) -> tuple[bool, str | None]:
+    """Latch mandatory manual-mode cooling until temperatures clear safely."""
+    if configured_mode != "manual":
+        _MANUAL_SAFETY_LATCHED.pop(cid, None)
+        return False, None
+
+    was_active = bool(_MANUAL_SAFETY_LATCHED.get(cid, False))
+    fault_active = policy.get("safety_state") == "failsafe"
+    thermal_active = policy.get("override") is True
+    reason = str(policy.get("control_reason") or "manual_thermal_safety")
+    active = fault_active or thermal_active
+
+    # Once critical cooling starts, retain it for a small temperature margin
+    # so a zero/manual request cannot oscillate around the exact threshold.
+    if was_active and not active:
+        hysteresis_c = 3
+        hdd = policy.get("hdd") if isinstance(policy.get("hdd"), dict) else {}
+        ssd = policy.get("ssd") if isinstance(policy.get("ssd"), dict) else {}
+        hdd_clear = not hdd.get("count") or int(hdd.get("max") or 0) < (
+            _int_value(cfg.get("single_override_hdd_c", 45), 45) - hysteresis_c
+        )
+        ssd_clear = not ssd.get("count") or int(ssd.get("max") or 0) < (
+            _int_value(cfg.get("single_override_ssd_c", 60), 60) - hysteresis_c
+        )
+        active = not (hdd_clear and ssd_clear)
+        if active:
+            reason = "thermal_hysteresis"
+
+    _MANUAL_SAFETY_LATCHED[cid] = active
+    if active and not was_active:
+        log.warning(
+            "manual thermal safety activated | cid=%s | requested=manual | applied=100%% | reason=%s",
+            cid,
+            reason,
+        )
+    elif was_active and not active:
+        log.info("manual thermal safety cleared | cid=%s", cid)
+    return active, reason if active else None
+
+
 def _apply_auto(
     cid: str,
     percent: int,
     enabled: bool,
+    manual_percent: int,
     min_interval: int,
     refresh_interval: int,
     hysteresis_percent: int,
@@ -272,74 +321,78 @@ def _apply_auto(
 ) -> dict:
     last_percent = _AUTO_LAST_PERCENT.get(cid)
     last_ts = _AUTO_LAST_TS.get(cid)
+    last_mode = _AUTO_LAST_MODE.get(cid)
     message = None
-
-    if not enabled:
-        # On startup or an enabled->disabled transition, release automatic
-        # control into the known-safe 100% state immediately instead of
-        # leaving the previous lease active for up to 60 seconds. Retry on a
-        # later cycle if the device is currently absent.
-        if cid not in _AUTO_SAFE_STOP_SENT:
-            try:
-                serial_status = serial_svc.get_serial_status(cid, full=False)
-                if serial_status.get("connected"):
-                    result = serial_svc.serial_set_pwm_percent(cid, 100)
-                    if result.get("ok"):
-                        _AUTO_SAFE_STOP_SENT.add(cid)
-                        _AUTO_LAST_PERCENT[cid] = 100
-                        _AUTO_LAST_TS[cid] = now_ts
-                        last_percent = 100
-                        last_ts = now_ts
-                    elif dbg_should("auto_safe_stop_failed_" + cid, 30):
-                        log.warning(
-                            "automatic output disabled but safe-stop failed for %s: %s",
-                            cid,
-                            result.get("error") or "send failed",
-                        )
-            except Exception as exc:
-                if dbg_should("auto_safe_stop_error_" + cid, 30):
-                    log.warning("automatic output disabled; safe-stop pending for %s: %s", cid, exc)
-        # Enabling auto again must always transmit a fresh control lease.
-        _AUTO_CONNECTED[cid] = False
-    else:
-        _AUTO_SAFE_STOP_SENT.discard(cid)
-        try:
-            serial_status = serial_svc.get_serial_status(cid, full=False)
-            connected = bool(serial_status.get("connected"))
-            was_connected = bool(_AUTO_CONNECTED.get(cid, False))
-            _AUTO_CONNECTED[cid] = connected
-            if not connected:
-                message = "controller not connected"
-                if dbg_should("auto_apply_disconnected_" + cid, 60):
-                    log.warning("auto-apply paused for %s: not connected", cid)
-            else:
-                elapsed = None if last_ts is None else max(0.0, now_ts - float(last_ts))
-                changed = (
-                    last_percent is None
-                    or (
-                        int(percent) != int(last_percent)
-                        and abs(int(percent) - int(last_percent)) >= hysteresis_percent
+    target_percent = _clamp(percent if enabled else manual_percent, 0, 100)
+    mode_name = "automatic" if enabled else "manual"
+    try:
+        serial_status = serial_svc.get_serial_status(cid, full=False)
+        connected = bool(serial_status.get("connected"))
+        was_connected = bool(_AUTO_CONNECTED.get(cid, False))
+        _AUTO_CONNECTED[cid] = connected
+        if not connected:
+            message = "controller not connected"
+            if dbg_should("output_disconnected_" + cid, 60):
+                log.warning(
+                    "controller output paused | cid=%s | mode=%s | reason=not connected",
+                    cid,
+                    mode_name,
+                )
+        else:
+            elapsed = None if last_ts is None else max(0.0, now_ts - float(last_ts))
+            changed = (
+                last_percent is None
+                or (
+                    target_percent != int(last_percent)
+                    and (
+                        not enabled
+                        or abs(target_percent - int(last_percent)) >= hysteresis_percent
                     )
                 )
-                change_due = changed and (elapsed is None or elapsed >= min_interval)
-                refresh_due = elapsed is None or elapsed >= refresh_interval
-                reconnected = not was_connected
-                if reconnected or change_due or refresh_due:
-                    result = serial_svc.serial_set_pwm_percent(cid, percent)
-                    if result.get("ok"):
-                        last_percent = int(percent)
-                        last_ts = now_ts
-                        _AUTO_LAST_PERCENT[cid] = int(percent)
-                        _AUTO_LAST_TS[cid] = now_ts
-                    else:
-                        message = str(result.get("error") or "send failed")
-                        if dbg_should("auto_apply_send_failed_" + cid, 30):
-                            log.warning("auto-apply send failed for %s: %s", cid, message)
-        except Exception as exc:
-            _AUTO_CONNECTED[cid] = False
-            message = "auto-apply error"
-            if dbg_should("auto_apply_error_" + cid, 30):
-                log.warning("auto-apply error for %s: %s", cid, exc)
+            )
+            change_due = changed and (elapsed is None or elapsed >= min_interval)
+            refresh_due = elapsed is None or elapsed >= refresh_interval
+            reconnected = not was_connected
+            mode_changed = last_mode is None or last_mode != enabled
+            if reconnected or mode_changed or change_due or refresh_due:
+                result = serial_svc.serial_set_pwm_percent(cid, target_percent)
+                if result.get("ok"):
+                    last_percent = target_percent
+                    last_ts = now_ts
+                    _AUTO_LAST_PERCENT[cid] = target_percent
+                    _AUTO_LAST_TS[cid] = now_ts
+                    _AUTO_LAST_MODE[cid] = enabled
+                    if reconnected or mode_changed or change_due:
+                        delivery_reason = (
+                            "reconnected" if reconnected
+                            else ("mode_change" if mode_changed else "target_change")
+                        )
+                        log.info(
+                            "controller output acknowledged | cid=%s | mode=%s | target=%s%% | reason=%s",
+                            cid,
+                            mode_name,
+                            target_percent,
+                            delivery_reason,
+                        )
+                else:
+                    message = str(result.get("error") or "send failed")
+                    if dbg_should("output_send_failed_" + cid, 30):
+                        log.warning(
+                            "controller output failed | cid=%s | mode=%s | reason=%s",
+                            cid,
+                            mode_name,
+                            message,
+                        )
+    except Exception as exc:
+        _AUTO_CONNECTED[cid] = False
+        message = f"{mode_name} output error"
+        if dbg_should("output_error_" + cid, 30):
+            log.warning(
+                "controller output error | cid=%s | mode=%s | error=%s",
+                cid,
+                mode_name,
+                exc,
+            )
 
     return {
         "auto_last_percent": int(last_percent) if last_percent is not None else None,
@@ -348,6 +401,7 @@ def _apply_auto(
         "auto_last_ts": int(last_ts) if last_ts is not None else None,
         "auto_paused": bool(message),
         "auto_message": message,
+        "output_target_percent": target_percent,
     }
 
 
@@ -438,7 +492,18 @@ def compute_status(app_context: dict) -> dict:
         top_drives, cfg, source_fault, source_required=top_source_required
     )
 
-    configured_auto_enabled = cfg.get("auto_apply") is True
+    legacy_auto_enabled = cfg.get("auto_apply") is True
+    configured_modes = [
+        str(controller.get("control_mode") or (
+            "auto" if legacy_auto_enabled else "manual"
+        )).strip().lower()
+        for controller in controllers_cfg
+        if isinstance(controller, dict)
+    ]
+    configured_auto_enabled = (
+        any(value == "auto" for value in configured_modes)
+        if configured_modes else legacy_auto_enabled
+    )
     # Simulation exists for UI/control-policy development only. It must never
     # renew a real controller lease at a synthetic temperature-derived value.
     auto_enabled = configured_auto_enabled and mode != "sim"
@@ -459,10 +524,24 @@ def compute_status(app_context: dict) -> dict:
         policy = _policy_for_drives(
             assigned, cfg, source_fault, source_required=source_required
         )
+        configured_mode = str(controller.get("control_mode") or (
+            "auto" if legacy_auto_enabled else "manual"
+        )).strip().lower()
+        if configured_mode not in {"auto", "manual"}:
+            configured_mode = "manual"
+        controller_auto_enabled = configured_mode == "auto" and mode != "sim"
+        manual_pwm = _clamp(_int_value(controller.get("manual_pwm"), 100), 0, 100)
+        manual_safety_active, manual_safety_reason = _manual_safety_state(
+            cid, configured_mode, policy, cfg, log
+        )
+        # Simulation may calculate recommendations, but it may only ever hold
+        # real hardware at the safe output.
+        delivered_manual_pwm = 100 if mode == "sim" or manual_safety_active else manual_pwm
         delivery = _apply_auto(
             cid,
             policy["recommended_pwm"],
-            auto_enabled,
+            controller_auto_enabled,
+            delivered_manual_pwm,
             min_interval,
             refresh_interval,
             hysteresis_percent,
@@ -477,6 +556,11 @@ def compute_status(app_context: dict) -> dict:
             "port": controller.get("port", ""),
             "hardware_uid": controller.get("hardware_uid"),
             "persistent_identity": bool(controller.get("hardware_uid")),
+            "control_mode": configured_mode,
+            "manual_pwm": manual_pwm,
+            "manual_safety_override_active": manual_safety_active,
+            "manual_safety_reason": manual_safety_reason,
+            "auto_apply": controller_auto_enabled,
             "drives": assigned,
             **policy,
             **delivery,
@@ -573,12 +657,26 @@ def compute_status(app_context: dict) -> dict:
         pass
 
     try:
-        from services.history import record_status
-        record_status(
+        from services.history import record_statuses
+        history_rows = [(
+            "",
             aggregate["hdd"].get("avg") if aggregate["hdd"].get("count") else None,
             aggregate["ssd"].get("avg") if aggregate["ssd"].get("count") else None,
             payload["recommended_pwm"],
-        )
+        )]
+        for controller in controller_states:
+            hdd = controller.get("hdd") if isinstance(controller.get("hdd"), dict) else {}
+            ssd = controller.get("ssd") if isinstance(controller.get("ssd"), dict) else {}
+            history_rows.append((
+                str(controller.get("id") or ""),
+                hdd.get("avg") if hdd.get("count") else None,
+                ssd.get("avg") if ssd.get("count") else None,
+                # Controller history represents the value delivered/renewed
+                # on the wire. In Manual mode this must not silently graph the
+                # unrelated curve recommendation.
+                int(controller.get("output_target_percent") or 0),
+            ))
+        record_statuses(history_rows)
     except Exception as exc:
         log.warning("failed to record history: %s", exc)
     return payload

@@ -2,6 +2,15 @@
 
 This changelog applies only to the single-channel Raspberry Pi Pico/RP2040 DIY target. Application releases use `v*`; DIY firmware releases use `fw-v*`. The future six-channel custom PCB will have its own target, artifact, and release stream.
 
+## 2.5.2 — 2026-07-14
+
+- Includes the protocol-2 identity, persistent full UID, `DIY-RP2040-xxxx` recognition name, GPIO16 LED identification, safe 100% startup, 60-second control lease, and watchdog fallback introduced in the unreleased 2.3.0–2.5.0 source revisions.
+- Brings USB CDC up before enabling the four-second watchdog so enumeration cannot be interrupted by a startup reset.
+- Defers WS2812/PIO construction until the Arduino/Mbed runtime is initialized, keeping non-essential peripherals out of the USB-critical startup path.
+- Supports the registered-controller `BOOTSEL` command used by FanBridge 1.4.0 for non-privileged, checksum-verified in-container updates.
+
+The protected release workflow publishes the UF2 and its SHA-256 companion only when `DIY_FIRMWARE_HIL_APPROVED_VERSION` exactly matches `2.5.2`.
+
 ## 2.5.0 — source ready, hardware validation pending
 
 - Identifies the DIY target as `FANBRIDGE_DIY protocol=2 board=rp2040-zero channels=1 uid=<hex>`.

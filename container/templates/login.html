@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% block title %}FanBridge — {{ 'First-time setup' if first_run else 'Sign in' }}{% endblock %}
+{% block title %}FanBridge — {{ 'First time setup' if first_run else 'Sign in' }}{% endblock %}
 {% block content %}
 <main class="login-page">
   <div class="login-shell">
@@ -10,16 +10,16 @@
 
     <form class="login-card" method="post">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <p class="eyebrow">{{ 'Secure first-run setup' if first_run else 'Local administration' }}</p>
+      <p class="eyebrow">{{ 'Secure first run setup' if first_run else 'Local administration' }}</p>
       <h1>{{ 'Create the administrator account' if first_run else 'Sign in' }}</h1>
       <p class="intro">
-        {{ 'Claim this FanBridge installation using the one-time token printed in the container log.' if first_run else 'Authenticate to view temperatures and manage controller output.' }}
+        {{ 'Claim this FanBridge installation using the one time token printed in the container log.' if first_run else 'Authenticate to view temperatures and manage controller output.' }}
       </p>
 
       <div class="login-fields">
         {% if first_run %}
         <div class="field">
-          <label for="setup-token">One-time setup token</label>
+          <label for="setup-token">One time setup token</label>
           <input id="setup-token" name="setup_token" type="password" required autocomplete="one-time-code" autofocus aria-describedby="setup-token-help">
           <p class="field-help" id="setup-token-help">Find this token in the FanBridge container log. It is removed after setup completes.</p>
         </div>
@@ -32,14 +32,14 @@
 
         <div class="field">
           <label for="password">Password</label>
-          <input id="password" name="password" type="password" required {% if first_run %}minlength="12" autocomplete="new-password"{% else %}autocomplete="current-password"{% endif %}>
-          {% if first_run %}<p class="field-help">Use at least 12 characters.</p>{% endif %}
+          <input id="password" name="password" type="password" required {% if first_run %}minlength="8" autocomplete="new-password"{% else %}autocomplete="current-password"{% endif %}>
+          {% if first_run %}<p class="field-help">Use at least 8 characters.</p>{% endif %}
         </div>
 
         {% if first_run %}
         <div class="field">
           <label for="confirm-password">Confirm password</label>
-          <input id="confirm-password" name="confirm" type="password" required minlength="12" autocomplete="new-password">
+          <input id="confirm-password" name="confirm" type="password" required minlength="8" autocomplete="new-password">
         </div>
         {% endif %}
       </div>

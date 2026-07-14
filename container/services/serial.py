@@ -1,4 +1,4 @@
-import os, glob, hashlib, logging, re, stat, threading, time
+import os, glob, hashlib, json, logging, re, stat, threading, time
 from contextlib import contextmanager
 from typing import Protocol, runtime_checkable, Any
 
@@ -237,6 +237,64 @@ def _public_serial_exception(exc: BaseException) -> str:
     return "serial device operation failed; see server logs"
 
 
+def _serial_event_field(value: Any, limit: int = 180) -> str:
+    """Return a single-line, bounded value suitable for the operator log."""
+    text = str(value or "").strip()
+    text = " ".join(text.split())
+    text = "".join(ch if 32 <= ord(ch) <= 126 else "?" for ch in text)
+    return text[:limit] or "(none)"
+
+
+def _operator_reply_summary(command: str, reply: Any) -> str:
+    """Turn verbose machine telemetry into a concise operator-facing reply."""
+    command_name = str(command or "").strip().upper().rstrip("?")
+    if command_name != "STATUS":
+        return _serial_event_field(reply)
+    try:
+        status = json.loads(str(reply or ""))
+    except (TypeError, ValueError):
+        return _serial_event_field(reply)
+    if not isinstance(status, dict):
+        return _serial_event_field(reply)
+
+    fields = [
+        f"fw={_serial_event_field(status.get('fw'), 24)}",
+        f"board={_serial_event_field(status.get('board'), 32)}",
+        f"uid={_serial_event_field(status.get('controller_uid'), 32)}",
+        f"setpoint={_serial_event_field(status.get('setpoint_pct'), 8)}%",
+        f"applied={_serial_event_field(status.get('applied_pwm_pct'), 8)}%",
+        f"failsafe={'ON' if status.get('failsafe_active') is True else 'off'}",
+    ]
+    if status.get("control_age_ms") is not None:
+        fields.append(f"control_age={_serial_event_field(status.get('control_age_ms'), 16)}ms")
+    if status.get("control_lease_ms") is not None:
+        fields.append(f"lease={_serial_event_field(status.get('control_lease_ms'), 16)}ms")
+    return "STATUS " + "; ".join(fields)
+
+
+def record_operator_transaction(cid: str, command: str, result: dict) -> None:
+    """Persist a user-requested serial transaction without logging background chatter.
+
+    The success event is written only after the caller has validated the controller
+    acknowledgement. This lets the controller console distinguish an attempted API
+    call from a command the controller actually accepted.
+    """
+    controller = _serial_event_field(cid, 32)
+    tx = _serial_event_field(command, 64)
+    if isinstance(result, dict) and result.get("ok"):
+        rx = _operator_reply_summary(command, result.get("reply") or "acknowledged")
+        _log().info("operator serial | cid=%s | TX %s | RX %s", controller, tx, rx)
+        return
+    _log().warning(
+        "operator serial | cid=%s | TX %s | ERROR %s",
+        controller,
+        tx,
+        _serial_event_field(
+            result.get("error") if isinstance(result, dict) else "command failed"
+        ),
+    )
+
+
 def _unique_order(seq):
     seen = set()
     out = []
@@ -250,6 +308,11 @@ def _unique_order(seq):
 
 def list_serial_ports():
     candidates = []
+    # A read-only /dev bind at /host-dev plus a character-device cgroup rule
+    # lets hot-plugged ACM nodes appear without recreating the container.
+    candidates.extend(sorted(glob.glob("/host-dev/serial/by-id/*")))
+    candidates.extend(sorted(glob.glob("/host-dev/ttyACM*")))
+    candidates.extend(sorted(glob.glob("/host-dev/ttyUSB*")))
     candidates.extend(sorted(glob.glob("/dev/serial/by-id/*")))
     candidates.extend(sorted(glob.glob("/dev/ttyACM*")))
     candidates.extend(sorted(glob.glob("/dev/ttyUSB*")))
@@ -267,7 +330,7 @@ def list_serial_ports():
     return _unique_order(candidates)
 
 
-def probe_serial_open(port: str, baud: int):
+def probe_serial_open(port: str, baud: int, cid: str = "unassigned"):
     if not port:
         return False, "no port specified"
     if port.startswith("/dev/ttyS"):
@@ -297,7 +360,13 @@ def probe_serial_open(port: str, baud: int):
         except Exception:
             pass
         try:
-            _log().warning("serial open failed | port=%s baud=%s err=%s", port, baud, exc)
+            _log().warning(
+                "serial open failed | cid=%s port=%s baud=%s err=%s",
+                cid,
+                port,
+                baud,
+                exc,
+            )
             if _GLOBAL_INC_OPEN_FAIL:
                 _GLOBAL_INC_OPEN_FAIL()
         except Exception:
@@ -871,6 +940,67 @@ def safe_stop_controller(cid: str) -> dict:
     return serial_set_pwm_percent(cid, 100)
 
 
+def enter_diy_bootsel(cid: str) -> dict:
+    """Put one positively identified DIY RP2040 into ROM BOOTSEL mode.
+
+    This is intentionally separate from the general serial console. It accepts
+    no caller-supplied command and always verifies maximum cooling before the
+    application firmware is stopped.
+    """
+    ctx = _get_ctx(cid)
+    if not ctx:
+        return {"ok": False, "error": "unknown controller id"}
+    if ctx.expected_type != "diy":
+        return {"ok": False, "error": "firmware upload is available only for DIY controllers"}
+
+    # Re-identify now; a cached quarantine record must not authorise a reboot
+    # after a USB path has been reused by another physical device.
+    details = identify_port_details(ctx.preferred) if ctx.preferred else None
+    if not details or details.get("type") != "diy":
+        return {"ok": False, "error": "configured device did not identify as a DIY RP2040 controller"}
+    actual_uid = normalise_hardware_uid(details.get("hardware_uid"))
+    if ctx.expected_uid and actual_uid != ctx.expected_uid:
+        return {"ok": False, "error": "controller hardware identity does not match the saved controller"}
+    if not details.get("supported") and not details.get("legacy"):
+        return {"ok": False, "error": "controller protocol is not eligible for a DIY firmware update"}
+
+    stopped = safe_stop_controller(cid)
+    if not stopped.get("ok"):
+        direct_stop = serial_send_line(cid, "100", expect_reply=True, timeout=0.6)
+        if not (
+            direct_stop.get("ok")
+            and direct_stop.get("reply") == "Set fan to 100%"
+        ):
+            return {"ok": False, "error": "maximum-cooling safe-stop could not be verified"}
+
+    usb_location = usb_info_for_port(ctx.preferred).get("location")
+    with _physical_transaction(ctx.preferred):
+        serial_port, error = open_serial(cid, timeout=0.6)
+        if error or serial_port is None:
+            return {"ok": False, "error": error or "serial device is unavailable"}
+        try:
+            serial_port.write(b"BOOTSEL\n")
+            serial_port.flush()
+            time.sleep(0.15)
+        except Exception as exc:
+            _log().warning("failed to enter BOOTSEL | cid=%s err=%s", cid, exc)
+            return {"ok": False, "error": _public_serial_exception(exc)}
+        finally:
+            try:
+                serial_port.close()
+            except Exception:
+                pass
+
+    ctx.identity = None
+    ctx.identity_checked_at = 0.0
+    return {
+        "ok": True,
+        "identity": details,
+        "port": ctx.preferred,
+        "usb_location": usb_location,
+    }
+
+
 def get_serial_status(cid: str, full: bool = True):
     ctx = _get_ctx(cid)
     if not ctx:
@@ -905,7 +1035,7 @@ def get_serial_status(cid: str, full: bool = True):
 
     if preferred:
         with ctx.lock:
-            ok, msg = probe_serial_open(preferred, ctx.baud)
+            ok, msg = probe_serial_open(preferred, ctx.baud, cid=cid)
         connected = ok
         message = msg
         identity = None
@@ -978,4 +1108,20 @@ def usb_info_for_port(port: str | None) -> dict:
                     break
         except Exception:
             pass
+    if not info:
+        # pyserial enumerates /dev, not a separately mounted /host-dev. Derive
+        # the physical USB location from sysfs so firmware updates can still
+        # target the same port after hotplug/re-enumeration.
+        tty_name = os.path.basename(canonical_port(port))
+        if re.fullmatch(r"tty(?:ACM|USB)\d+", tty_name):
+            try:
+                device_path = os.path.realpath(f"/sys/class/tty/{tty_name}/device")
+                locations = re.findall(
+                    r"/(\d+-\d+(?:\.\d+)*(?::\d+\.\d+)?)",
+                    device_path,
+                )
+                if locations:
+                    info = {"device": port, "location": locations[-1]}
+            except Exception:
+                pass
     return info

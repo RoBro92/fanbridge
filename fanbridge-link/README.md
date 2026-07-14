@@ -6,10 +6,10 @@ FanBridge Link controllers receive PWM commands from the FanBridge service over 
 
 | Product target | Board identity | Channels | Source and release status |
 |---|---|---:|---|
-| **DIY FanBridge Link** | `FANBRIDGE_DIY`, board `rp2040-zero` | 1 | Available now in `rp2040/`. The current source version is 2.5.0. Existing `fw-v<version>` tags and `fanbridge-rp2040-<version>.uf2` assets belong only to this target. |
+| **DIY FanBridge Link** | `FANBRIDGE_DIY`, board `rp2040-zero` | 1 | Available now in `rp2040/`. The current source version is 2.5.2. Existing `fw-v<version>` tags and `fanbridge-rp2040-<version>.uf2` assets belong only to this target. |
 | **Custom FanBridge Link PCB** | A separate production identity is required | 6 | Planned raw-RP2040 target on design hold. Its firmware source, build target, tag convention, and artifact name have not been implemented or approved. |
 
-These are independently versioned products: a version number or UF2 for one target says nothing about compatibility with the other. The future custom-PCB workflow must use a distinct target-specific tag and artifact name and must validate the board identity before an update. The custom-PCB design hold does not block DIY 2.5.0 builds, releases, or support.
+These are independently versioned products: a version number or UF2 for one target says nothing about compatibility with the other. The future custom-PCB workflow must use a distinct target-specific tag and artifact name and must validate the board identity before an update. The custom-PCB design hold does not block DIY 2.5.2 builds, releases, or support.
 
 ## DIY electrical interface
 
@@ -23,19 +23,19 @@ The DIY target is a single open-collector PWM control channel on Pico `GP15`. Wi
 
 The fan itself must run at its safe/full speed when the PWM input is released; qualify this behavior with the exact fan model. The firmware uses inverted Pico output because a low GP15 turns the NPN off and releases the fan's internally pulled-up PWM input. Do not substitute a push-pull 3.3 V connection to the fan PWM wire.
 
-Firmware 2.2 and earlier started at 0% and renewed their fallback timer for diagnostic commands. The repaired host detects the published legacy DIY responses, sends a one-shot validated 100% command, and quarantines automatic output, but that is only a migration safeguard. Upgrade existing DIY boards to 2.5.0 before relying on them for unattended cooling, persistent USB identity, and LED identification.
+Firmware 2.2 and earlier started at 0% and renewed their fallback timer for diagnostic commands. The repaired host detects the published legacy DIY responses, sends a one-shot validated 100% command, and quarantines automatic output, but that is only a migration safeguard. Upgrade existing DIY boards to 2.5.2 before relying on them for unattended cooling, persistent USB identity, LED identification, and in-app updates.
 
 ## Persistent controller identity
 
 Firmware 2.4.0 and newer report `uid=<hex>` in their protocol-2 `ID?` response. The value comes from the RP2040 board's paired flash unique ID and is not the user-facing controller name. FanBridge stores the complete 16-character UID with the controller configuration, while keeping the name, drive assignments, curves, and other settings server-side. If visible controller device paths change, FanBridge scans them and rebinds only an exact UID match; it refuses duplicate UIDs and never guesses from product type alone.
 
-Firmware 2.5.0 presents as `DIY-RP2040-xxxx`, using the last four hexadecimal UID characters as a short physical recognition label. Four hexadecimal characters cannot guarantee fleet-wide uniqueness, so this suffix is never used as the binding key; the full UID remains authoritative.
+Firmware 2.5.2 presents as `DIY-RP2040-xxxx`, using the last four hexadecimal UID characters as a short physical recognition label. Four hexadecimal characters cannot guarantee fleet-wide uniqueness, so this suffix is never used as the binding key; the full UID remains authoritative.
 
 Protocol-1 firmware remains compatible but is explicitly port-bound. After an existing controller is upgraded to 2.4.0 or newer, FanBridge records its UID on the first verified handshake while preserving its name, assignments, and settings. The replacement path must still be exposed inside the container. Docker device mappings are fixed at container creation, so a host device that disappears from the container may require correcting the stable `/dev/serial/by-id/` mapping and restarting the container.
 
 ## Pre-enrolment LED identification
 
-The Add Controller dialog can send the fixed `IDENTIFY` command to a selected, unregistered DIY controller. Firmware 2.5.0 flashes the RP2040-Zero onboard WS2812 on GPIO16 in orange for ten seconds and replies `IDENTIFYING duration_ms=10000`. The command is non-blocking and deliberately does not renew or create a PWM control lease. The host performs a protocol-2 identity handshake first and does not expose arbitrary serial or PWM commands through this endpoint.
+The Add Controller dialog can send the fixed `IDENTIFY` command to a selected, unregistered DIY controller. Firmware 2.5.2 flashes the RP2040-Zero onboard WS2812 on GPIO16 in orange for ten seconds and replies `IDENTIFYING duration_ms=10000`. The command is non-blocking and deliberately does not renew or create a PWM control lease. The host performs a protocol-2 identity handshake first and does not expose arbitrary serial or PWM commands through this endpoint.
 
 This behaviour applies only to the DIY RP2040-Zero. The planned speaker/beeper identification for the official custom PCB is a separate hardware and protocol task and is not implemented here.
 
@@ -53,7 +53,7 @@ The resulting manual-flash image is `fanbridge-link/rp2040/.pio/build/pico/firmw
 
 ## DIY hardware release test
 
-No physical board was attached during the repository repair, so 2.5.0 must not be described as hardware-validated until the following results are recorded for the actual RP2040-Zero, transistor circuit, fan, hub (if any), and power supply:
+Before publishing a DIY firmware release, record the following results for the actual RP2040-Zero, transistor circuit, fan, hub (if any), and power supply:
 
 1. Scope GP15 and the fan-side PWM input through power-up, USB attach, reset, watchdog reset, and the entire ROM BOOTSEL interval; the fan input must remain released/full-speed until a valid numeric command is accepted.
 2. Confirm `ID?` reports `FANBRIDGE_DIY protocol=2 board=rp2040-zero channels=1 uid=<16-hex-character-id>`, the UID persists across reset, power loss, and firmware reflashing, numeric `0..100` commands return the exact requested acknowledgement, malformed/out-of-range commands do not change output, and `RPM?` reports unsupported rather than a fabricated zero.
@@ -66,7 +66,11 @@ Record the equipment, firmware commit, measurements, and pass/fail result for ev
 
 ## Firmware-update policy
 
-Container-side flashing is hard-disabled, not merely hidden behind an environment toggle. The standard Docker and Unraid configurations intentionally have no USB-bus, block-device, or mount access. Manual flashing from the Unraid host or a trusted workstation is the supported path until separate product identities, signed/target-bound manifests, and safe device selection have been implemented and reviewed.
+The standard Unraid template supports non-privileged container-side flashing for a registered DIY controller by mapping `/dev/bus/usb` and allowing only the required USB character-device classes. FanBridge selects the already registered controller, requests its safe BOOTSEL transition, targets the matching RP2040 USB location, writes with `picotool`, and verifies the protocol identity after restart.
+
+The remote updater is bound to the fixed `RoBroLabs/fanbridge` GitHub release path. It accepts only final DIY releases at or above the 2.5.0 safety baseline that contain both `fanbridge-rp2040-<version>.uf2` and its `.sha256` companion. The protected release workflow produces those assets only for the hardware-in-the-loop approved version. The published 2.1.0 and 2.2.0 images do not meet this contract and are ignored. User-supplied UF2 files still require independent hardware qualification; the application validates their RP2040 UF2 structure but cannot prove their source.
+
+Remove the `/dev/bus/usb` mapping to disable all in-app flashing. The host procedure below remains the recovery path when Docker USB access is unavailable. The future official six-channel PCB must use a separate identity, release stream, and compatibility gate.
 
 ## Verified DIY update from an Unraid terminal
 
@@ -75,7 +79,7 @@ These instructions apply only to the single-channel DIY Pico/RP2040 target. Do n
 ```bash
 set -euo pipefail
 
-VERSION="REPLACE_WITH_RELEASE_VERSION"  # for example: 2.5.0
+VERSION="REPLACE_WITH_RELEASE_VERSION"  # for example: 2.5.2
 ASSET="fanbridge-rp2040-${VERSION}.uf2"
 BASE_URL="https://github.com/RoBroLabs/fanbridge/releases/download/fw-v${VERSION}"
 WORK_DIR="$(mktemp -d /tmp/fanbridge-firmware.XXXXXX)"
@@ -156,7 +160,7 @@ On a desktop workstation the BOOTSEL volume is normally mounted automatically, s
 ## Release naming
 
 - The current DIY release stream uses `fw-v<diy-version>` tags.
-- DIY assets use `fanbridge-rp2040-<diy-version>.uf2` and a matching `.uf2.sha256` file. Version 2.5.0 is the current DIY source version.
+- DIY assets use `fanbridge-rp2040-<diy-version>.uf2` and a matching `.uf2.sha256` file. Version 2.5.2 is the current DIY source version.
 - The future six-channel custom PCB must have its own version stream, target-specific tag convention, artifact name, checksum, and compatibility validation. Those names remain intentionally undefined until its hardware and firmware targets are approved.
 - Never infer cross-product compatibility from matching version numbers, the shared RP2040 architecture, or the generic FanBridge Link name.
 

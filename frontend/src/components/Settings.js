@@ -23,6 +23,81 @@ export const CURVE_PROFILES = {
 
 let latestDriveAssignments = {};
 let latestExcludedDevices = [];
+let systemLogTimer = null;
+const DRIVE_SORT_STORAGE_KEY = 'fanbridge-global-drive-sort';
+const DRIVE_SORT_KEYS = new Set(['name', 'device', 'serial', 'capacity', 'type', 'state', 'temp', 'assignment']);
+const driveSortCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+let globalDriveSort = { key: 'device', direction: 'asc' };
+
+function loadDriveSortPreference() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(DRIVE_SORT_STORAGE_KEY) || '{}');
+    if (DRIVE_SORT_KEYS.has(saved.key) && ['asc', 'desc'].includes(saved.direction)) {
+      globalDriveSort = { key: saved.key, direction: saved.direction };
+    }
+  } catch {
+    globalDriveSort = { key: 'device', direction: 'asc' };
+  }
+}
+
+function saveDriveSortPreference() {
+  try {
+    localStorage.setItem(DRIVE_SORT_STORAGE_KEY, JSON.stringify(globalDriveSort));
+  } catch {
+    // Sorting still works when browser storage is unavailable.
+  }
+}
+
+function formatUnraidName(drive) {
+  const rawName = String(drive?.slot || drive?.section || '').trim();
+  if (!rawName) return '—';
+  if (/^parity$/i.test(rawName)) return 'Parity 1';
+  const parityMatch = rawName.match(/^parity(\d+)$/i);
+  if (parityMatch) return `Parity ${parityMatch[1]}`;
+  const diskMatch = rawName.match(/^disk(\d+)$/i);
+  if (diskMatch) return `Disk ${diskMatch[1]}`;
+  return rawName;
+}
+
+function getDriveRowSortValue(row, key) {
+  if (key === 'assignment') {
+    return row.querySelector('select')?.selectedOptions?.[0]?.textContent?.trim() || '';
+  }
+  const property = `sort${key.charAt(0).toUpperCase()}${key.slice(1)}`;
+  return row.dataset[property] || '';
+}
+
+function applyGlobalDriveSort() {
+  const table = document.querySelector('#global-drives-table-container table');
+  const tbody = table?.querySelector('tbody');
+  if (!table || !tbody) return;
+
+  const rows = [...tbody.querySelectorAll('tr[data-drive-row]')];
+  const numericKeys = new Set(['capacity', 'temp']);
+  rows.sort((left, right) => {
+    const leftValue = getDriveRowSortValue(left, globalDriveSort.key);
+    const rightValue = getDriveRowSortValue(right, globalDriveSort.key);
+    const leftMissing = leftValue === '';
+    const rightMissing = rightValue === '';
+    if (leftMissing !== rightMissing) return leftMissing ? 1 : -1;
+
+    let comparison;
+    if (numericKeys.has(globalDriveSort.key)) {
+      comparison = Number(leftValue) - Number(rightValue);
+    } else {
+      comparison = driveSortCollator.compare(leftValue, rightValue);
+    }
+    return globalDriveSort.direction === 'desc' ? -comparison : comparison;
+  });
+  rows.forEach(row => tbody.appendChild(row));
+
+  table.querySelectorAll('th[data-sort-key]').forEach(header => {
+    const active = header.dataset.sortKey === globalDriveSort.key;
+    header.setAttribute('aria-sort', active
+      ? (globalDriveSort.direction === 'asc' ? 'ascending' : 'descending')
+      : 'none');
+  });
+}
 
 function formatCapacity(value) {
   const bytes = Number(value);
@@ -37,6 +112,115 @@ function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, character => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   })[character]);
+}
+
+function initSystemLogs() {
+  const logbox = document.getElementById('system-logbox');
+  const levelSelect = document.getElementById('system-log-level');
+  const clearButton = document.getElementById('system-log-clear');
+  const downloadButton = document.getElementById('system-log-download');
+  if (!logbox || !levelSelect || !clearButton || !downloadButton) return;
+
+  let lastId = 0;
+  let entries = [];
+  const colours = {
+    DEBUG: 'var(--color-text-muted)',
+    INFO: '#3b82f6',
+    WARNING: 'var(--color-warning)',
+    ERROR: 'var(--color-error)',
+    CRITICAL: 'var(--color-error)',
+  };
+
+  const render = () => {
+    logbox.replaceChildren();
+    logbox.style.removeProperty('color');
+    if (!entries.length) {
+      const empty = document.createElement('span');
+      empty.className = 'text-muted';
+      empty.textContent = 'No system log entries at this level yet.';
+      logbox.appendChild(empty);
+      return;
+    }
+
+    entries.forEach((entry) => {
+      const line = document.createElement('div');
+      const level = String(entry.level || 'INFO').toUpperCase();
+      const timestamp = new Date(Number(entry.ts || 0) * 1000);
+      const time = Number.isFinite(timestamp.getTime()) ? timestamp.toLocaleTimeString() : '--:--:--';
+      line.style.display = 'grid';
+      line.style.gridTemplateColumns = '70px 66px minmax(0, 1fr)';
+      line.style.gap = '8px';
+      line.style.marginBottom = '4px';
+
+      const timeToken = document.createElement('span');
+      timeToken.textContent = time;
+      timeToken.style.color = 'var(--color-text-muted)';
+      const levelToken = document.createElement('span');
+      levelToken.textContent = level;
+      levelToken.style.color = colours[level] || 'var(--color-text-primary)';
+      const messageToken = document.createElement('span');
+      messageToken.textContent = String(entry.msg || '');
+      messageToken.style.overflowWrap = 'anywhere';
+      messageToken.style.color = level === 'ERROR' || level === 'CRITICAL'
+        ? 'var(--color-error)'
+        : 'var(--color-text-primary)';
+      line.append(timeToken, levelToken, messageToken);
+      logbox.appendChild(line);
+    });
+    logbox.scrollTop = logbox.scrollHeight;
+  };
+
+  const loadLogs = async () => {
+    if (document.hidden) return;
+    try {
+      const response = await api.getLogs({
+        since: lastId,
+        minLevel: levelSelect.value === 'DEBUG' ? 'DEBUG' : 'INFO',
+        limit: 500,
+        scope: 'system',
+      });
+      if (Array.isArray(response.items) && response.items.length) {
+        entries.push(...response.items);
+        entries = entries.slice(-500);
+      }
+      lastId = Math.max(lastId, Number(response.last_id || 0));
+      render();
+    } catch (error) {
+      logbox.textContent = error.message || 'System logs are unavailable.';
+      logbox.style.color = 'var(--color-error)';
+    }
+  };
+
+  levelSelect.addEventListener('change', async () => {
+    try {
+      await api.setLogLevel(levelSelect.value);
+      lastId = 0;
+      entries = [];
+      await loadLogs();
+    } catch (error) {
+      levelSelect.value = 'INFO';
+      logbox.textContent = error.message || 'Could not change the log level.';
+      logbox.style.color = 'var(--color-error)';
+    }
+  });
+  clearButton.addEventListener('click', async () => {
+    try {
+      await api.clearLogs({ scope: 'system' });
+      lastId = 0;
+      entries = [];
+      render();
+    } catch (error) {
+      logbox.textContent = error.message || 'Could not clear system logs.';
+      logbox.style.color = 'var(--color-error)';
+    }
+  });
+  downloadButton.addEventListener('click', () => {
+    window.location.assign('/api/logs/download?scope=system&format=text');
+  });
+
+  if (systemLogTimer !== null) window.clearInterval(systemLogTimer);
+  loadLogs();
+  systemLogTimer = window.setInterval(loadLogs, 3000);
 }
 
 export function initSettingsContainer(container) {
@@ -56,18 +240,19 @@ export function initSettingsContainer(container) {
       <div class="glass-card" style="margin-bottom: 24px;">
         <h3 style="margin: 0 0 16px 0;">Global Drive Assignments</h3>
         <p class="text-muted" style="font-size: 13px; margin-bottom: 16px;">Assign detected drives to specific controllers. Drives not assigned to a controller will not factor into its Fan Curve calculation.</p>
-        
+
         <div id="global-drives-table-container" style="display: none; overflow-x: auto; border: 1px solid var(--glass-border); border-radius: 8px;">
           <table style="width: 100%; border-collapse: collapse; font-size: 13px; text-align: left;">
             <thead style="background: var(--color-bg-inset);">
               <tr>
-                <th style="padding: 10px 12px; color: var(--color-text-secondary); font-weight: 500;">Device</th>
-                <th style="padding: 10px 12px; color: var(--color-text-secondary); font-weight: 500;">Serial / ID</th>
-                <th style="padding: 10px 12px; color: var(--color-text-secondary); font-weight: 500;">Capacity</th>
-                <th style="padding: 10px 12px; color: var(--color-text-secondary); font-weight: 500;">Type</th>
-                <th style="padding: 10px 12px; color: var(--color-text-secondary); font-weight: 500;">State</th>
-                <th style="padding: 10px 12px; color: var(--color-text-secondary); font-weight: 500;">Temp (°C)</th>
-                <th style="padding: 10px 12px; color: var(--color-text-secondary); font-weight: 500;">Assignment</th>
+                <th data-sort-key="name" aria-sort="none"><button type="button" class="table-sort-button" data-sort-key="name">Unraid Name</button></th>
+                <th data-sort-key="device" aria-sort="none"><button type="button" class="table-sort-button" data-sort-key="device">Device</button></th>
+                <th data-sort-key="serial" aria-sort="none"><button type="button" class="table-sort-button" data-sort-key="serial">Serial / ID</button></th>
+                <th data-sort-key="capacity" aria-sort="none"><button type="button" class="table-sort-button" data-sort-key="capacity">Capacity</button></th>
+                <th data-sort-key="type" aria-sort="none"><button type="button" class="table-sort-button" data-sort-key="type">Type</button></th>
+                <th data-sort-key="state" aria-sort="none"><button type="button" class="table-sort-button" data-sort-key="state">State</button></th>
+                <th data-sort-key="temp" aria-sort="none"><button type="button" class="table-sort-button" data-sort-key="temp">Temp (°C)</button></th>
+                <th data-sort-key="assignment" aria-sort="none"><button type="button" class="table-sort-button" data-sort-key="assignment">Assignment</button></th>
               </tr>
             </thead>
             <tbody>
@@ -107,7 +292,7 @@ export function initSettingsContainer(container) {
           <p class="text-muted" style="font-size: 13px; margin-top: 8px;">Add a controller first to assign drives.</p>
         </div>
       </div>
-      
+
       </div> <!-- End tab-global-drives -->
 
       <div id="tab-global-curves" style="display: none;">
@@ -117,7 +302,7 @@ export function initSettingsContainer(container) {
           <h3 style="margin: 0; font-size: 14px;">Fan Curves</h3>
           <p class="text-muted" style="font-size: 13px; margin: 0;">Configure global thresholds and automated fan curves.</p>
         </div>
-        
+
         <div style="padding-top: 16px; border-top: 1px solid var(--glass-border);">
           <div style="display: flex; justify-content: space-between; margin-bottom: 24px; flex-wrap: wrap; gap: 16px;">
             <div style="display: flex; gap: 32px; flex-wrap: wrap; align-items: flex-start;">
@@ -134,7 +319,7 @@ export function initSettingsContainer(container) {
                   </div>
                 </div>
               </div>
-              
+
               <div>
                 <label class="text-secondary" style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; display: block; margin-bottom: 8px;">Auto-Apply Settings</label>
                 <div style="display: flex; gap: 12px;">
@@ -160,7 +345,7 @@ export function initSettingsContainer(container) {
               </select>
             </div>
           </div>
-          
+
           <div style="margin-bottom: 24px;">
             <h4 style="margin: 0 0 12px 0; font-size: 13px;">HDD Fan Curve</h4>
             <div style="display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px;" id="hdd-curve-container">
@@ -175,7 +360,7 @@ export function initSettingsContainer(container) {
           </div>
         </div>
       </div>
-      
+
       </div> <!-- End tab-global-curves -->
 
       <div id="tab-global-program" style="display: none;">
@@ -221,28 +406,18 @@ export function initSettingsContainer(container) {
         <h3 style="margin:0 0 16px; display:flex; justify-content: space-between; align-items:center;">
           <span>System Logs</span>
           <div style="display: flex; gap: 8px;">
-            <select class="input-base" style="font-size: 11px; padding: 4px 8px;">
-              <option value="NORMAL">Normal</option>
+            <select id="system-log-level" class="input-base" style="font-size: 11px; padding: 4px 8px;">
+              <option value="INFO">Normal</option>
               <option value="DEBUG">Debug</option>
             </select>
-            <button class="btn" style="font-size: 11px; padding: 4px 8px;">Download</button>
-            <button class="btn" style="font-size: 11px; padding: 4px 8px;">Clear</button>
+            <button id="system-log-download" class="btn" style="font-size: 11px; padding: 4px 8px;">Download</button>
+            <button id="system-log-clear" class="btn" style="font-size: 11px; padding: 4px 8px;">Clear</button>
           </div>
         </h3>
-        
-        <div style="display: flex; gap: 12px; margin-bottom: 16px; font-size: 12px;">
-          <label style="display: flex; align-items: center; gap: 6px;"><input type="checkbox" checked class="custom-checkbox" style="--checkbox-color: var(--color-error);"> ERROR</label>
-          <label style="display: flex; align-items: center; gap: 6px;"><input type="checkbox" checked class="custom-checkbox" style="--checkbox-color: var(--color-warning);"> WARNING</label>
-          <label style="display: flex; align-items: center; gap: 6px;"><input type="checkbox" checked class="custom-checkbox" style="--checkbox-color: #3b82f6;"> INFO</label>
-          <label style="display: flex; align-items: center; gap: 6px;"><input type="checkbox" class="custom-checkbox" style="--checkbox-color: var(--color-text-muted);"> DEBUG</label>
-        </div>
-
-        <div style="height: 150px; overflow-y: auto; background: var(--color-bg-inset); border: 1px solid var(--glass-border); border-radius: 8px; padding: 12px; font-family: ui-monospace, monospace; font-size: 11px; color: var(--color-text-primary); white-space: pre-wrap;">
-<span style="color: var(--color-text-secondary);">[17:15:00] INFO: FanBridge Container Started</span>
-<span style="color: var(--color-text-secondary);">[17:15:01] INFO: Loading disks.ini... Success (4 drives found)</span>
-<span style="color: var(--color-text-secondary);">[17:15:02] INFO: Connecting to JBOD 1 (/dev/ttyUSB0)... Connected</span>
-<span style="color: var(--color-warning);">[17:15:05] WARN: /dev/nvme0n1 approaching warning threshold (42°C)</span>
-        </div>
+        <p class="text-muted" style="font-size: 12px; margin: -6px 0 14px;">
+          Live FanBridge container and application output. Controller-specific traffic is shown in each controller console.
+        </p>
+        <div id="system-logbox" role="log" aria-live="polite" style="height: 180px; overflow-y: auto; background: var(--color-bg-inset); border: 1px solid var(--glass-border); border-radius: 8px; padding: 12px; font-family: ui-monospace, monospace; font-size: 11px; color: var(--color-text-primary); white-space: pre-wrap;">Loading system logs…</div>
       </div>
 
       </div> <!-- End tab-global-program -->
@@ -255,7 +430,7 @@ export function initSettingsContainer(container) {
   const tabDrivesBtn = document.getElementById('btn-tab-global-drives');
   const tabCurvesBtn = document.getElementById('btn-tab-global-curves');
   const tabProgramBtn = document.getElementById('btn-tab-global-program');
-  
+
   const tabDrivesContent = document.getElementById('tab-global-drives');
   const tabCurvesContent = document.getElementById('tab-global-curves');
   const tabProgramContent = document.getElementById('tab-global-program');
@@ -265,7 +440,7 @@ export function initSettingsContainer(container) {
     [tabDrivesContent, tabCurvesContent, tabProgramContent].forEach(content => {
       if (content) content.style.display = 'none';
     });
-    
+
     if (activeBtn) activeBtn.classList.add('active');
     if (activeContent) activeContent.style.display = 'block';
   };
@@ -278,17 +453,17 @@ export function initSettingsContainer(container) {
   const hddContainer = document.getElementById('hdd-curve-container');
   const ssdContainer = document.getElementById('ssd-curve-container');
   const profileSelect = document.getElementById('global-curve-profile');
-  
+
   let isGlobalCurvesRendered = false;
 
   const renderGlobalCurves = (profileName) => {
     let p = CURVE_PROFILES[profileName];
     if (!p) return;
-    
+
     if (!isGlobalCurvesRendered) {
       hddContainer.innerHTML = generateCurveHTML('hdd', p.hddTemps, p.hddPwms);
       ssdContainer.innerHTML = generateCurveHTML('ssd', p.ssdTemps, p.ssdPwms);
-      
+
       // Add input listeners to change profile to 'Custom' if user edits manually
       const inputs = [...hddContainer.querySelectorAll('input'), ...ssdContainer.querySelectorAll('input')];
       inputs.forEach(input => {
@@ -334,7 +509,7 @@ export function initSettingsContainer(container) {
     tabDrivesContent.addEventListener('input', autoSave);
     tabDrivesContent.addEventListener('change', autoSave);
   }
-  
+
   if (tabCurvesContent) {
     tabCurvesContent.addEventListener('input', autoSave);
     tabCurvesContent.addEventListener('change', autoSave);
@@ -345,6 +520,21 @@ export function initSettingsContainer(container) {
     localStorage.setItem('fanbridge-theme', e.target.value);
     if (window.applyTheme) window.applyTheme();
   });
+
+  loadDriveSortPreference();
+  container.querySelectorAll('.table-sort-button').forEach(button => {
+    button.addEventListener('click', () => {
+      const key = button.dataset.sortKey;
+      if (!DRIVE_SORT_KEYS.has(key)) return;
+      globalDriveSort = {
+        key,
+        direction: globalDriveSort.key === key && globalDriveSort.direction === 'asc' ? 'desc' : 'asc',
+      };
+      saveDriveSortPreference();
+      applyGlobalDriveSort();
+    });
+  });
+  initSystemLogs();
 }
 
 function generateCurveHTML(type, temps, pwms) {
@@ -377,7 +567,7 @@ export async function loadSettings() {
   try {
     // We can extract settings from the standard /api/status payload if it's there,
     // or fetch explicitly from /api/status or whatever endpoint the API has.
-    const res = await api.getStatus(); 
+    const res = await api.getStatus();
     if (!res || !res.config) return;
 
     // We always want to show the global drives table, even if there are no controllers.
@@ -390,7 +580,7 @@ export async function loadSettings() {
     const drivesTbody = document.querySelector('#global-drives-table-container tbody');
     if (drivesTbody && res.drives) {
       if (res.drives.length === 0) {
-        drivesTbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 16px; color: var(--color-text-secondary);">No drives detected in disks.ini</td></tr>';
+        drivesTbody.innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 16px; color: var(--color-text-secondary);">No drives detected in disks.ini</td></tr>';
       } else {
         const controllers = res.controllers || [];
         const excludeList = res.exclude_devices || [];
@@ -416,14 +606,19 @@ export async function loadSettings() {
             ? String(assignment)
             : 'none';
           const serial = escapeHtml(d.serial || d.id || '—');
+          const unraidName = escapeHtml(formatUnraidName(d));
+          const rawUnraidName = escapeHtml(d.slot || d.section || '');
+          const capacityBytes = Number.isFinite(Number(d.capacity_bytes)) ? Number(d.capacity_bytes) : '';
+          const tempValue = d.temp !== null && Number.isFinite(Number(d.temp)) ? Number(d.temp) : '';
           const controllerOptions = [
             `<option value="none"${selectedAssignment === 'none' ? ' selected' : ''}>Not Included</option>`,
             ...controllers.map(c => `<option value="${c.id}"${selectedAssignment === String(c.id) ? ' selected' : ''}>${c.name}</option>`),
           ].join('');
-          
+
           return `
-            <tr style="border-bottom: 1px solid var(--glass-border);">
-              <td style="padding: 10px 12px;">${d.dev}</td>
+            <tr data-drive-row="true" data-sort-name="${unraidName}" data-sort-device="${escapeHtml(d.dev)}" data-sort-serial="${serial}" data-sort-capacity="${capacityBytes}" data-sort-type="${escapeHtml(d.type)}" data-sort-state="${escapeHtml(d.state || '')}" data-sort-temp="${tempValue}" style="border-bottom: 1px solid var(--glass-border);">
+              <td style="padding: 10px 12px; white-space: nowrap; font-weight: 500;" title="${rawUnraidName}">${unraidName}</td>
+              <td style="padding: 10px 12px; white-space: nowrap; font-family: ui-monospace, monospace;">${escapeHtml(d.dev)}</td>
               <td style="padding: 10px 12px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, monospace;" title="${serial}">${serial}</td>
               <td style="padding: 10px 12px; white-space: nowrap;">${formatCapacity(d.capacity_bytes)}</td>
               <td style="padding: 10px 12px;"><span style="background: ${typeBg}; color: ${typeColor}; padding: 2px 6px; border-radius: 4px; font-size: 11px;">${d.type}</span></td>
@@ -437,6 +632,7 @@ export async function loadSettings() {
             </tr>
           `;
         }).join('');
+        applyGlobalDriveSort();
       }
     }
 
@@ -474,7 +670,7 @@ async function saveSettings() {
   statusEl.textContent = 'Saving...';
   statusEl.style.color = 'var(--color-text-muted)';
   statusEl.style.opacity = '1';
-  
+
   try {
     // Read the form
     const excludes = new Set(latestExcludedDevices);

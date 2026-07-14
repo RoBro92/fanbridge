@@ -6,6 +6,8 @@ import { CURVE_PROFILES } from './Settings.js';
 import Chart from 'chart.js/auto';
 
 const CONTROLLER_NAME_MAX = 24;
+let historyChartInstance = null;
+let powerChartInstance = null;
 
 export function initDashboardContainer(container) {
   // Setup HTML shell
@@ -89,7 +91,7 @@ export function initDashboardContainer(container) {
     <div id="tab-config-content" style="display: none;">
       <!-- Condensed Hardware Telemetry & Preferences -->
       <div id="controller-config-overview" style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px;">
-        
+
         <!-- Hardware Telemetry Card -->
         <div class="glass-card" id="hardware-telemetry-card" style="display: flex; flex-direction: column;">
           <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
@@ -113,7 +115,7 @@ export function initDashboardContainer(container) {
         <!-- Controller Preferences Card -->
         <div class="glass-card" style="display: flex; flex-direction: column;">
           <h3 style="margin: 0 0 16px 0; font-size: 14px;">Controller Preferences</h3>
-          
+
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 16px;">
             <div>
               <label class="text-secondary" style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; display: block; margin-bottom: 8px;">Rename Controller</label>
@@ -154,7 +156,7 @@ export function initDashboardContainer(container) {
             </div>
           </div>
         </div>
-        
+
         <div id="local-pwm-curves-container" style="display: none; padding-top: 16px; border-top: 1px solid var(--glass-border);">
           <div style="display: flex; justify-content: space-between; margin-bottom: 24px; flex-wrap: wrap; gap: 16px;">
             <div style="display: flex; gap: 32px; flex-wrap: wrap; align-items: flex-start;">
@@ -171,7 +173,7 @@ export function initDashboardContainer(container) {
                   </div>
                 </div>
               </div>
-              
+
               <div>
                 <label class="text-secondary" style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; display: block; margin-bottom: 8px;">Auto-Apply Settings</label>
                 <div style="display: flex; gap: 12px;">
@@ -237,7 +239,7 @@ export function initDashboardContainer(container) {
   let togglesHtml = '';
   for (let i = 0; i < 6; i++) {
     const isEnabled = localStorage.getItem(`fan-enabled-${i}`) !== 'false';
-    
+
     togglesHtml += `
       <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
         <input type="checkbox" id="toggle-fan-${i}" ${isEnabled ? 'checked' : ''} style="cursor: pointer;">
@@ -337,7 +339,7 @@ export function initDashboardContainer(container) {
   const btnCurveGlobal = document.getElementById('btn-curve-global');
   const btnCurveCustom = document.getElementById('btn-curve-custom');
   const localCurvesContainer = document.getElementById('local-pwm-curves-container');
-  
+
   if (btnCurveGlobal && btnCurveCustom && localCurvesContainer) {
     window.setCurveMode = (mode) => {
       if (mode === 'global') {
@@ -363,7 +365,7 @@ export function initDashboardContainer(container) {
   const localHddContainer = document.getElementById('local-hdd-curve-container');
   const localSsdContainer = document.getElementById('local-ssd-curve-container');
   const localProfileSelect = document.getElementById('local-curve-profile');
-  
+
   if (localHddContainer && localSsdContainer && localProfileSelect) {
     const generateLocalCurveHTML = (type, temps, pwms) => {
       let tempsHtml = '';
@@ -443,13 +445,14 @@ export function initDashboardContainer(container) {
   const btnDeleteController = document.getElementById('btn-delete-controller');
   if (btnDeleteController) {
     btnDeleteController.addEventListener('click', async () => {
-      if (!activeControllerId) return;
+      const controllerId = String(window.activeControllerId || '');
+      if (!controllerId) return;
       if (!confirm('Are you sure you want to permanently delete this controller? This action cannot be undone.')) return;
-      
+
       btnDeleteController.disabled = true;
       btnDeleteController.textContent = 'Deleting...';
       try {
-        await api.deleteController(activeControllerId);
+        await api.deleteController(controllerId);
         // On success, simply reload the page or trigger a full state refresh
         window.location.reload();
       } catch (err) {
@@ -466,16 +469,16 @@ export function initDashboardContainer(container) {
   initLogs(document.getElementById('logs-container'));
   initLinkUpdates(document.getElementById('updates-container'));
 
-  // Initialize Placeholder Chart
+  // Charts start empty and are populated only from live API data.
   const ctx = document.getElementById('historyChart').getContext('2d');
-  new Chart(ctx, {
+  historyChartInstance = new Chart(ctx, {
     type: 'line',
     data: {
-      labels: ['10:00', '10:05', '10:10', '10:15', '10:20', '10:25'],
+      labels: [],
       datasets: [
-        { label: 'HDD Avg °C', data: [30, 31, 31, 32, 33, 33], borderColor: '#7dd3fc', tension: 0.3 },
-        { label: 'SSD Avg °C', data: [38, 39, 41, 41, 42, 42], borderColor: '#d8b4fe', tension: 0.3 },
-        { label: 'PWM %', data: [30, 35, 45, 50, 60, 60], borderColor: '#f97316', tension: 0.3, yAxisID: 'y1' }
+        { label: 'HDD Avg °C', data: [], borderColor: '#7dd3fc', tension: 0.3, spanGaps: false },
+        { label: 'SSD Avg °C', data: [], borderColor: '#d8b4fe', tension: 0.3, spanGaps: false },
+        { label: 'PWM %', data: [], borderColor: '#f97316', tension: 0.3, yAxisID: 'y1' }
       ]
     },
     options: {
@@ -491,12 +494,12 @@ export function initDashboardContainer(container) {
 
   // Initialize Power Chart
   const pCtx = document.getElementById('powerChart').getContext('2d');
-  new Chart(pCtx, {
+  powerChartInstance = new Chart(pCtx, {
     type: 'line',
     data: {
-      labels: ['-5m', '-4m', '-3m', '-2m', '-1m', 'Now'],
+      labels: [],
       datasets: [
-        { label: 'Total Power (W)', data: [120, 125, 118, 122, 130, 128], borderColor: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)', fill: true, tension: 0.3 }
+        { label: 'Total Power (W)', data: [], borderColor: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)', fill: true, tension: 0.3 }
       ]
     },
     options: {
@@ -534,6 +537,28 @@ export function initDashboardContainer(container) {
 
 
 
+export function updateControllerHistory(history) {
+  if (!historyChartInstance) return;
+  const rows = Array.isArray(history) ? history : [];
+  historyChartInstance.data.labels = rows.map((row) => {
+    const date = new Date(Number(row?.ts) * 1000);
+    return Number.isFinite(date.getTime())
+      ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      : '';
+  });
+  historyChartInstance.data.datasets[0].data = rows.map((row) => (
+    row?.hdd_avg !== null && Number.isFinite(Number(row?.hdd_avg)) ? Number(row.hdd_avg) : null
+  ));
+  historyChartInstance.data.datasets[1].data = rows.map((row) => (
+    row?.ssd_avg !== null && Number.isFinite(Number(row?.ssd_avg)) ? Number(row.ssd_avg) : null
+  ));
+  historyChartInstance.data.datasets[2].data = rows.map((row) => (
+    Number.isFinite(Number(row?.pwm)) ? Number(row.pwm) : null
+  ));
+  historyChartInstance.update('none');
+}
+
+
 export function updateDashboardData(data, activeControllerId) {
   const emptyState = document.getElementById('empty-state-content');
   const tabDrives = document.getElementById('tab-drives-content');
@@ -568,7 +593,7 @@ export function updateDashboardData(data, activeControllerId) {
 
   if (emptyState) emptyState.style.display = 'none';
   if (dashTabs) dashTabs.style.display = 'flex';
-  
+
   // Bind the unchanged drive table to the selected controller's policy view.
   updateDriveTable({
     ...data,
@@ -577,7 +602,7 @@ export function updateDashboardData(data, activeControllerId) {
     ssd: controller.ssd,
     recommended_pwm: controller.recommended_pwm,
   });
-  
+
   // Only show the active tab content
   const tabDrivesBtn = document.getElementById('btn-tab-drives');
   if (tabDrivesBtn && tabDrivesBtn.classList.contains('active')) {
@@ -604,7 +629,7 @@ export function updateDashboardData(data, activeControllerId) {
     statusRow.classList.toggle('controller-status-row--diy', isDIY);
     statusRow.classList.toggle('controller-status-row--official', !isDIY);
   }
-  
+
   if (pip12v) pip12v.style.display = isDIY ? 'none' : 'flex';
   if (pipThermal) pipThermal.style.display = isDIY ? 'none' : 'flex';
   if (pipHealth) pipHealth.style.display = isDIY ? 'none' : 'flex';
@@ -617,10 +642,20 @@ export function updateDashboardData(data, activeControllerId) {
   const amps = (metrics.current_a || 0);
   const totalWatts = (volts * amps).toFixed(1);
 
+  if (!isDIY && powerChartInstance && Number.isFinite(volts) && Number.isFinite(amps)) {
+    powerChartInstance.data.labels.push(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+    powerChartInstance.data.datasets[0].data.push(Number(totalWatts));
+    if (powerChartInstance.data.labels.length > 60) {
+      powerChartInstance.data.labels.shift();
+      powerChartInstance.data.datasets[0].data.shift();
+    }
+    powerChartInstance.update('none');
+  }
+
   const heroWatts = document.getElementById('hero-watts');
   const heroAmps = document.getElementById('hero-amps');
   const heroVolts = document.getElementById('hero-volts');
-  
+
   if (heroWatts) heroWatts.textContent = isDIY ? '-- W' : `${totalWatts} W`;
   if (heroAmps) heroAmps.textContent = isDIY ? '-- A' : `${amps.toFixed(2)} A`;
   if (heroVolts) heroVolts.textContent = isDIY ? '-- V' : `${volts.toFixed(2)} V`;
@@ -628,16 +663,16 @@ export function updateDashboardData(data, activeControllerId) {
   for (let i = 0; i < 6; i++) {
     const fan = fans[i] || null;
     const isStalled = fan && fan.pwm_percent > 0 && fan.rpm === 0;
-    
+
     const cardEl = document.getElementById(`fan-card-${i}`);
     const badgeEl = document.getElementById(`fan-badge-${i}`);
-    
+
     const rpmEl = document.getElementById(`fan-rpm-${i}`);
     if (rpmEl) rpmEl.textContent = isDIY || !fan ? '--' : fan.rpm;
-    
+
     const pwmEl = document.getElementById(`fan-pwm-${i}`);
     if (pwmEl) pwmEl.textContent = fan ? fan.pwm_percent : '--';
-    
+
     if (!badgeEl) continue;
 
     if (!fan) {

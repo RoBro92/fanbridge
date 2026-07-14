@@ -20,12 +20,12 @@ export function createAddControllerModal(onAdded) {
 
   modal.innerHTML = `
     <h2 style="margin-top: 0; margin-bottom: 24px; font-size: 24px; color: var(--color-text-primary);">Add Controller</h2>
-    
+
     <div class="form-group" style="margin-bottom: 20px;">
       <label style="display: block; margin-bottom: 8px; color: var(--color-text-secondary); font-size: 14px;">Controller Name</label>
       <input type="text" id="add-ctrl-name" placeholder="e.g. JBOD 1" maxlength="${CONTROLLER_NAME_MAX}" autocomplete="off" style="width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--color-border); background: var(--color-bg-inset); color: var(--color-text-primary); font-size: 14px; outline: none;">
     </div>
-    
+
     <div class="form-group" style="margin-bottom: 24px;">
       <label style="display: block; margin-bottom: 8px; color: var(--color-text-secondary); font-size: 14px;">Port & Type Auto-Detect</label>
       <select id="add-ctrl-port" style="width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--color-border); background: var(--color-bg-inset); color: var(--color-text-primary); font-size: 14px; outline: none;">
@@ -33,7 +33,7 @@ export function createAddControllerModal(onAdded) {
       </select>
       <div id="add-ctrl-identity" style="margin-top: 8px; min-height: 18px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5;"></div>
     </div>
-    
+
     <div style="display: flex; gap: 12px; justify-content: space-between;">
       <div style="display: flex; gap: 8px;">
         <button id="add-ctrl-scan" class="btn btn-secondary" style="border: 1px solid var(--color-border); background: transparent; color: var(--color-text-primary); padding: 8px 16px; border-radius: 6px; cursor: pointer;">Scan</button>
@@ -64,10 +64,10 @@ export function createAddControllerModal(onAdded) {
     const port = portSelect.value;
     const selectedPortData = portsData.find(p => p.port === port);
     const type = selectedPortData ? selectedPortData.type : 'unknown';
-    
+
     const isValidType = type === 'official' || type === 'diy';
     const isReady = nameInput.value.trim() && port && isValidType && !selectedPortData?.configured_controller_id;
-    
+
     submitBtn.disabled = !isReady;
     submitBtn.style.opacity = isReady ? '1' : '0.5';
     submitBtn.style.cursor = isReady ? 'pointer' : 'not-allowed';
@@ -120,10 +120,10 @@ export function createAddControllerModal(onAdded) {
     const type = selectedPortData ? selectedPortData.type : 'unknown';
     let id = nameInput.value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
     if (!/^[a-z]/.test(id)) id = `controller_${id || 'new'}`;
-    
+
     submitBtn.disabled = true;
     submitBtn.textContent = 'Adding...';
-    
+
     try {
       await api.addController({
         id: id,

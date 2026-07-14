@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.4.0
+
+- Added hotplug-aware `/host-dev` discovery so registered controllers can rebind by persistent hardware UID after USB path changes.
+- Added optional `/dev/bus/usb` access and narrowly scoped USB character-device rules for non-privileged DIY RP2040 firmware updates.
+- Kept the container read-only, unprivileged, capability-free, and protected by no-new-privileges.
+- Updated maintenance-mode guidance for manual PWM and fan-test controls.
+- Aligned descriptions and template versioning with FanBridge 1.4.0.
+
 ## v1.3.0
 
 - Converted the template to the current `<Container version="2">` format.

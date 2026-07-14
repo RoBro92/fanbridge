@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 import os, re, time
 from services import serial as serial_svc
 
@@ -9,7 +9,19 @@ _UNAVAILABLE_ERROR = "controller unavailable or identity not verified"
 
 def _public_status(status: dict) -> dict:
     public = dict(status)
-    public["message"] = "connected" if public.get("connected") else _UNAVAILABLE_ERROR
+    identity = public.get("identity") if isinstance(public.get("identity"), dict) else {}
+    if public.get("connected"):
+        public["message"] = "connected"
+        public["code"] = "connected"
+    elif identity.get("legacy"):
+        public["message"] = "DIY firmware update required (2.4.0 or newer)"
+        public["code"] = "firmware_update_required"
+    elif not public.get("available"):
+        public["message"] = "no mapped serial device is available"
+        public["code"] = "device_unavailable"
+    else:
+        public["message"] = _UNAVAILABLE_ERROR
+        public["code"] = "identity_unverified"
     return public
 
 
@@ -53,8 +65,6 @@ def api_serial_tools():
 
 @bp.post("/send")
 def api_serial_send():
-    if os.environ.get("FANBRIDGE_MAINTENANCE_MODE", "0") != "1":
-        return jsonify({"ok": False, "error": "raw serial commands require maintenance mode"}), 403
     data = request.get_json(force=True, silent=True) or {}
     if not isinstance(data, dict):
         return jsonify({"ok": False, "error": "JSON object required"}), 400
@@ -81,16 +91,45 @@ def api_serial_send():
         }), 403
     status = serial_svc.get_serial_status(str(cid), full=False)
     if not status.get("connected"):
+        serial_svc.record_operator_transaction(
+            cid,
+            line,
+            {"ok": False, "error": "controller unavailable; command not sent"},
+        )
         return jsonify({
             "ok": False,
             "error": _UNAVAILABLE_ERROR,
         }), 409
     res = serial_svc.serial_send_line(cid, line, expect_reply=True)
+    serial_svc.record_operator_transaction(cid, line, res)
     if not res.get("ok"):
         return jsonify({
             "ok": False,
             "error": "serial diagnostic command failed",
         }), 502
+    return jsonify(res)
+
+
+@bp.post("/test")
+def api_serial_test():
+    if os.environ.get("FANBRIDGE_MAINTENANCE_MODE", "0") != "1":
+        return jsonify({"ok": False, "error": "fan test requires maintenance mode"}), 403
+    data = request.get_json(force=True, silent=True) or {}
+    cid = data.get("cid") if isinstance(data, dict) else None
+    if not isinstance(cid, str) or not _CID_RE.fullmatch(cid):
+        return jsonify({"ok": False, "error": "valid cid is required"}), 400
+    status = serial_svc.get_serial_status(cid, full=False)
+    if not status.get("connected"):
+        serial_svc.record_operator_transaction(
+            cid,
+            "TEST",
+            {"ok": False, "error": "controller unavailable; command not sent"},
+        )
+        return jsonify({"ok": False, "error": _UNAVAILABLE_ERROR}), 409
+    res = serial_svc.serial_send_line(cid, "TEST", expect_reply=True, timeout=1.0)
+    serial_svc.record_operator_transaction(cid, "TEST", res)
+    if not res.get("ok"):
+        return jsonify({"ok": False, "error": "controller fan test failed"}), 502
     return jsonify(res)
 
 
@@ -104,7 +143,13 @@ def api_serial_pwm():
     cid = data.get("cid")
     if not isinstance(cid, str) or not _CID_RE.fullmatch(cid):
         return jsonify({"ok": False, "error": "valid cid is required"}), 400
-    res = serial_svc.serial_set_pwm_percent(cid, data.get("value"))
+    # A manual command is also a control-mode transition. Keeping this atomic
+    # prevents the automatic worker from overwriting the new setpoint on its
+    # next temperature/curve cycle.
+    set_manual_pwm = current_app.config.get("FB_SET_MANUAL_PWM")
+    if not callable(set_manual_pwm):
+        return jsonify({"ok": False, "error": "manual PWM service is unavailable"}), 503
+    res = set_manual_pwm(cid, data.get("value"))
     code = 200 if res.get("ok") else 400
     if not res.get("ok"):
         return jsonify({

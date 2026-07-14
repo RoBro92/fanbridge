@@ -11,6 +11,10 @@ services:
       - "8080:8080"
     volumes:
       - ./dev-appdata:/config
+      # Read-only host device names update across unplug/replug. Device cgroup
+      # rules below still permit only USB ACM serial and BOOTSEL USB access.
+      # - /dev:/host-dev:ro
+      # - /dev/bus/usb:/dev/bus/usb:rw
       # On an Unraid host, enable this read-only directory mapping. FanBridge
       # deliberately ships no fabricated disks.ini data.
       # - /var/local/emhttp:/unraid:ro
@@ -18,6 +22,9 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # device_cgroup_rules:
+    #   - "c 166:* rmw"
+    #   - "c 189:* rmw"
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=16m

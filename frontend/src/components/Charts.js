@@ -7,7 +7,7 @@ const fanCharts = {};
 
 export function initFanChart(canvasId) {
   const ctx = document.getElementById(canvasId).getContext('2d');
-  
+
   const chart = new Chart(ctx, {
     type: 'line',
     data: {
@@ -32,7 +32,7 @@ export function initFanChart(canvasId) {
       },
       scales: {
         x: { display: false },
-        y: { 
+        y: {
           display: false,
           min: 0, // RPM always starts at 0
         }
@@ -47,7 +47,7 @@ export function initFanChart(canvasId) {
       },
     }
   });
-  
+
   fanCharts[canvasId] = chart;
   return chart;
 }

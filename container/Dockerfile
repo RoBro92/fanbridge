@@ -16,7 +16,7 @@ RUN mkdir -p container/templates \
 FROM python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates tzdata \
+ && apt-get install -y --no-install-recommends ca-certificates tzdata picotool \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -45,6 +45,7 @@ COPY RELEASE.md ./RELEASE.md
 COPY LICENSE /licenses/LICENSE
 
 ENV PYTHONUNBUFFERED=1 \
+    HOME=/tmp \
     FANBRIDGE_CONFIG=/config/config.yml \
     FANBRIDGE_DISKS_STALE_WARN_SEC=600 \
     GUNICORN_THREADS=4 \

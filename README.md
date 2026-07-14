@@ -10,14 +10,14 @@
 
 FanBridge is a Dockerised Unraid service that reads the temperature and state data written by Unraid, calculates cooling demand, and controls external PWM fan hardware over USB serial. Drives are assigned to individual controllers, so separate enclosures or cooling zones can follow their own disks without a global controller fallback.
 
-FanBridge 1.3.0 supports the single-channel DIY RP2040-Zero controller. The six-channel FanBridge Link custom PCB is represented in the application design, but its production hardware and firmware remain under development and must not use the DIY firmware image.
+FanBridge 1.4.0 supports the single-channel DIY RP2040-Zero controller. The six-channel FanBridge Link custom PCB is represented in the application design, but its production hardware and firmware remain under development and must not use the DIY firmware image.
 
 > [!IMPORTANT]
 > FanBridge controls physical cooling hardware. Automatic output is opt-in, unsafe or stale telemetry resolves to the configured fail-safe output, and every deployment must be validated with the actual fans, controller, USB path, and Unraid host before unattended use.
 
 ## Current interface
 
-The following captures come from FanBridge 1.3.0 using local test telemetry. The disconnected serial state is intentional; no physical controller was attached while the documentation was captured.
+The following captures show the FanBridge 1.4.0 controller dashboard and global drive-assignment workflow. Values shown in the captures are local test telemetry; production images do not generate demo controller, disk, history, or log data.
 
 ### Controller telemetry
 
@@ -47,7 +47,7 @@ The following captures come from FanBridge 1.3.0 using local test telemetry. The
 
 | Product | Identity | Channels | Status |
 |---|---|---:|---|
-| **DIY FanBridge Link** | `FANBRIDGE_DIY`, `rp2040-zero` | 1 | Supported by the source in `fanbridge-link/rp2040`. Firmware source 2.5.0 adds persistent identity and LED identification; physical hardware validation is still required before publishing its UF2 release. |
+| **DIY FanBridge Link** | `FANBRIDGE_DIY`, `rp2040-zero` | 1 | Supported by the source in `fanbridge-link/rp2040`. Firmware 2.5.2 adds persistent identity, LED identification, safe host-control leasing, and in-app verified updates. |
 | **FanBridge Link custom PCB** | Separate production identity required | 6 | Planned. Hardware design, production firmware, release stream, and speaker-based identification are not yet approved. |
 
 The two products require separate board identities, build targets, versions, compatibility gates, and release artifacts. Never flash `fanbridge-rp2040-*.uf2` to the future six-channel custom PCB.
@@ -95,7 +95,7 @@ Full template instructions are in [unraid-templates/README.md](unraid-templates/
    cat /mnt/user/appdata/fanbridge/setup.token
    ```
 
-3. Create the first administrator with the setup token and a password of at least 12 characters.
+3. Create the first administrator with the setup token and a password of at least 8 characters.
 4. Pass each physical controller into the container using its stable host `/dev/serial/by-id/...` path.
 5. In **Add Controller**, press **Scan**, select a detected device, and use **Identify** when supported before adding it.
 6. Open **Settings → Drive Assignment** and assign each disk to one specific controller or **Not Included**.
@@ -107,7 +107,7 @@ FanBridge removes its generated setup-token file after the first administrator i
 
 DIY firmware 2.4.0 and newer returns a full 16-character flash UID during `ID?`. FanBridge uses the complete UID—not the display name or the four-character suffix—as the binding key for the controller's name, drive assignments, curves, and settings.
 
-Firmware 2.5.0 presents a recognition label in the form `DIY-RP2040-xxxx`. The final four hexadecimal characters are useful for matching a physical board to the UI but are not globally unique.
+Firmware 2.5.2 presents a recognition label in the form `DIY-RP2040-xxxx`. The final four hexadecimal characters are useful for matching a physical board to the UI but are not globally unique.
 
 If a board moves to a different host USB port:
 
@@ -116,7 +116,7 @@ If a board moves to a different host USB port:
 - Docker cannot see a host device that was never passed into the container; correct the Device mapping and restart the container when necessary.
 - Legacy protocol-1 firmware remains bound to its configured container path and should be upgraded before unattended use.
 
-The Add Controller **Identify** action is deliberately bounded. For DIY firmware 2.5.0 it flashes the RP2040-Zero onboard WS2812 orange for ten seconds without creating or renewing the PWM control lease. Speaker identification for the custom PCB is not implemented.
+The Add Controller **Identify** action is deliberately bounded. For DIY firmware 2.5.2 it flashes the RP2040-Zero onboard WS2812 orange for ten seconds without creating or renewing the PWM control lease. Speaker identification for the custom PCB is not implemented.
 
 ## Temperature polling and fail-safe behaviour
 
@@ -125,6 +125,8 @@ FanBridge consumes the last sample written by Unraid. In **Settings → Disk Set
 The browser's refresh interval does not change how often Unraid queries drive attributes. When automatic output is enabled, the background control loop independently refreshes the controller command before the firmware's 60-second control lease expires.
 
 Missing, malformed, stale, or incomplete active-drive telemetry is unsafe and produces the configured fail-safe demand. Sleeping or unassigned disks follow the idle policy instead. Verify these cases on the real server before relying on automatic control.
+
+Manual mode bypasses temperature curves, but it does not bypass FanBridge's mandatory safety layer. A critical assigned-drive temperature, missing or stale active-drive telemetry, or an unhealthy control loop forces a controller-acknowledged 100% command. Critical-temperature protection remains latched until temperatures clear the configured threshold by 3°C. The DIY controller has no tachometer input, so an acknowledgement confirms the PWM target was accepted—not that the physical fan is spinning; validate the fan and electrical path before relying on unattended control.
 
 ## Docker CLI example
 
@@ -158,9 +160,11 @@ Do not set multiple Gunicorn workers. Controller sessions, state, and scheduling
 
 ## Firmware updates
 
-In-container flashing is hard-disabled. The production container intentionally has no USB-bus, block-device, mount, or privileged access.
+The controller configuration page can update a registered DIY RP2040 without privileged mode when `/dev/bus/usb` and the USB character-device rule from the Unraid template are present. Fan output is held at 100% while the controller enters BOOTSEL, the image is written, and its protocol identity is checked after restart.
 
-Use the checksum-verified host procedure in [fanbridge-link/README.md](fanbridge-link/README.md). At the time of writing, firmware 2.5.0 is source-ready but still requires recorded hardware-in-the-loop validation before its UF2 can be published as an approved release.
+Remote installation is intentionally restricted to the fixed `RoBroLabs/fanbridge` GitHub release path. FanBridge ignores releases older than the 2.5.0 safety baseline, drafts, prereleases, and any release without both the target-specific UF2 and its SHA-256 companion. The protected firmware workflow publishes that pair only for the version approved by the hardware-in-the-loop release gate. A local hardware-verified UF2 can also be uploaded through the same panel.
+
+When an approved final DIY release is available, **Install latest approved firmware** offers it only after validating the target-specific asset and checksum. The older 2.1.0 and 2.2.0 releases are never offered. The future six-channel official PCB requires its own firmware identity and release channel and cannot use the DIY image. The checksum-verified host procedure remains documented in [fanbridge-link/README.md](fanbridge-link/README.md) as a recovery path.
 
 ## Security boundary
 

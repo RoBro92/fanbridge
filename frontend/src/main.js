@@ -3,14 +3,14 @@ import './styles/layout.css';
 import './styles/components.css';
 
 import { api, initApi } from './api.js';
-import { initDashboardContainer, updateDashboardData } from './components/Dashboard.js';
+import { initDashboardContainer, updateDashboardData, updateControllerHistory } from './components/Dashboard.js';
 import { initFanChart, updateFanChart } from './components/Charts.js';
 import { initSettingsContainer, loadSettings } from './components/Settings.js';
 import { createAddControllerModal } from './components/AddControllerModal.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   const app = document.getElementById('app');
-  
+
   // Read meta tags injected by Flask
   initApi();
   const pollInterval = parseInt(document.querySelector('meta[name="poll-interval"]')?.content || '7', 10);
@@ -23,7 +23,7 @@ document.addEventListener('DOMContentLoaded', () => {
     '"': '&quot;',
     "'": '&#039;',
   }[character]));
-  
+
   // Create shell with Sidebar layout
   app.innerHTML = `
     <div class="app-wrapper">
@@ -60,7 +60,7 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
         </div>
       </aside>
-      
+
       <main class="main-content">
         <header class="header" style="display: none;">
           <div class="header-brand">
@@ -68,7 +68,7 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
           <div id="connection-status"></div>
         </header>
-        
+
         <div id="dashboard-container"></div>
         <div id="settings-container" style="display: none;"></div>
       </main>
@@ -78,7 +78,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const dashboardContainer = document.getElementById('dashboard-container');
   const settingsContainer = document.getElementById('settings-container');
   const connectionStatus = document.getElementById('connection-status');
-  
+
   // Apply Theme
   function applyTheme() {
     const savedTheme = localStorage.getItem('fanbridge-theme') || 'system';
@@ -99,11 +99,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Expose applyTheme globally so Settings.js can trigger it
   window.applyTheme = applyTheme;
-  
+
   // Initialize DOM
   initDashboardContainer(dashboardContainer);
   initSettingsContainer(settingsContainer);
-  
+
   // Navigation State
   window.activeControllerId = null;
   const navSettings = document.getElementById('nav-settings');
@@ -178,6 +178,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Set default active if null
     if (!window.activeControllerId && controllers.length > 0) {
       window.activeControllerId = controllers[0].id;
+      pollHistory();
     }
 
     let html = '';
@@ -207,18 +208,19 @@ document.addEventListener('DOMContentLoaded', () => {
       el.addEventListener('click', (e) => {
         e.preventDefault();
         window.activeControllerId = el.getAttribute('data-id');
-        
+
         // Update UI state
         document.querySelectorAll('.controller-nav-item').forEach(n => n.classList.remove('active'));
         el.classList.add('active');
         navSettings.classList.remove('active');
-        
+
         dashboardContainer.style.display = 'block';
         settingsContainer.style.display = 'none';
         pageTitle.textContent = el.getAttribute('data-name') || 'Dashboard';
-        
+
         // Immediate UI refresh if data is cached (pollStatus will catch up soon)
         pollStatus();
+        pollHistory();
       });
     });
 
@@ -235,7 +237,7 @@ document.addEventListener('DOMContentLoaded', () => {
       dashboardContainer.style.display = 'block';
       settingsContainer.style.display = 'none';
       navSettings.classList.remove('active');
-      
+
       let activeName = 'Dashboard';
       document.querySelectorAll('.controller-nav-item').forEach(el => {
         if (el.getAttribute('data-id') === window.activeControllerId) {
@@ -256,14 +258,16 @@ document.addEventListener('DOMContentLoaded', () => {
     pageTitle.textContent = 'Global Settings';
     loadSettings(); // Fetch fresh settings when opened
   });
-  
+
   async function pollStatus() {
     try {
       const data = await api.getStatus();
       renderSidebar(data.controllers);
       updateDashboardData(data, window.activeControllerId);
       const activeController = (data.controllers || []).find(c => c.id === window.activeControllerId);
-      
+      window.setSerialToolsController?.(window.activeControllerId);
+      window.refreshFirmwarePanel?.();
+
       const serialPip = document.getElementById('pip-serial-status');
       if (serialPip) {
         const connected = activeController?.serial?.connected;
@@ -271,8 +275,9 @@ document.addEventListener('DOMContentLoaded', () => {
         serialPip.parentElement.classList.remove('pip-success', 'pip-error', 'pip-warning');
         serialPip.parentElement.classList.add(connected === true ? 'pip-success' : connected === false ? 'pip-error' : 'pip-warning');
         serialPip.parentElement.style.color = '';
+        serialPip.parentElement.title = activeController?.serial?.message || '';
       }
-      
+
       const lastUpdatePip = document.getElementById('pip-last-updated');
       if (lastUpdatePip) {
         const now = new Date();
@@ -308,7 +313,10 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       const modePip = document.getElementById('pip-mode-status');
-      if (modePip) modePip.innerText = data.auto_apply === true ? 'AUTO' : 'MANUAL';
+      const controlMode = activeController?.control_mode === 'auto' ? 'auto' : 'manual';
+      if (modePip) modePip.innerText = controlMode.toUpperCase();
+      window.setControllerMode?.(controlMode);
+      window.setManualPwmValue?.(activeController?.manual_pwm);
     } catch (e) {
       console.error('Polling error:', e);
       const serialPip = document.getElementById('pip-serial-status');
@@ -318,7 +326,7 @@ document.addEventListener('DOMContentLoaded', () => {
         serialPip.parentElement.classList.add('pip-error');
         serialPip.parentElement.style.color = '';
       }
-      
+
       const lastUpdatePip = document.getElementById('pip-last-updated');
       if (lastUpdatePip) {
         lastUpdatePip.innerText = 'Failed';
@@ -330,9 +338,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function pollHistory() {
     try {
-      // Fetch last 1 hour of history
-      const history = await api.getHistory(1);
-      if (history && history.history) {
+      const cid = String(window.activeControllerId || '');
+      if (!cid) {
+        updateControllerHistory([]);
+        return;
+      }
+      const timeframe = document.getElementById('chart-timeframe')?.value || '1h';
+      const hours = ({ '1h': 1, '12h': 12, '1d': 24, '1w': 168, '1m': 720 })[timeframe] || 1;
+      const history = await api.getHistory(hours, cid);
+      if (history?.cid === String(window.activeControllerId || '') && history.history) {
+        updateControllerHistory(history.history);
         for(let i=0; i<6; i++) {
           updateFanChart(`fan-chart-${i}`, history.history, i);
         }
@@ -345,7 +360,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // Initial fetch and start loop
   pollStatus();
   pollHistory();
-  
+  document.getElementById('chart-timeframe')?.addEventListener('change', pollHistory);
+
   let statusTimer = setInterval(pollStatus, pollInterval * 1000);
   setInterval(pollHistory, 15000); // Update charts every 15s
 

@@ -71,18 +71,21 @@ def _sysfs(dev: str, rel: str) -> Optional[str]:
 
 
 def _spin_state_from_sysfs(dev: str) -> Optional[bool]:
+    """Return True only when sysfs positively reports a low-power state.
+
+    SCSI's ``device/state`` describes the transport, not whether rotating
+    platters are stopped. Unraid can therefore report a disk as spun down
+    while sysfs still says ``running``. Treat running/active as unknown and
+    leave Unraid's explicit ``spundown`` value authoritative.
+    """
     st = _sysfs(dev, "device/state")
     if st:
         s = st.lower()
-        if "running" in s or "active" in s:
-            return False
         if "offline" in s or "suspended" in s or "standby" in s:
             return True
     rs = _sysfs(dev, "power/runtime_status")
     if rs:
         r = rs.lower()
-        if "active" in r:
-            return False
         if "suspend" in r:
             return True
     return None

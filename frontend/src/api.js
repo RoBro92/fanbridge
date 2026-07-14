@@ -152,16 +152,19 @@ function jsonRequest(endpoint, method, body) {
 
 export const api = {
   getStatus: (options) => fetchApi('/api/status', options),
-  getHistory: (hours, options) => {
+  getHistory: (hours, cid, options) => {
     const query = new URLSearchParams({ hours: String(hours) });
+    if (cid) query.set('cid', cid);
     return fetchApi(`/api/history?${query}`, options);
   },
   getPorts: (options) => fetchApi('/api/ports', options),
   identifyPort: (port) => jsonRequest('/api/ports/identify', 'POST', { port }),
   getAppVersion: (options) => fetchApi('/api/app/version', options),
-  getRpStatus: (cid, options) => {
-    const query = cid ? `?${new URLSearchParams({ cid })}` : '';
-    return fetchApi(`/api/rp/status${query}`, options);
+  getRpStatus: (cid, options = {}) => {
+    const { refresh = false, ...fetchOptions } = options || {};
+    const query = new URLSearchParams({ cid });
+    if (refresh) query.set('refresh', '1');
+    return fetchApi(`/api/rp/status?${query}`, fetchOptions);
   },
   saveSettings: (settings) => jsonRequest('/api/settings', 'POST', settings),
   saveCurves: (curves) => jsonRequest('/api/curves', 'POST', curves),
@@ -173,15 +176,21 @@ export const api = {
   }),
   logout: () => fetchApi('/logout', { method: 'POST' }),
   changePassword: (values) => jsonRequest('/api/change_password', 'POST', values),
-  getLogs: ({ since = 0, minLevel = 'INFO', limit = 300 } = {}, options) => {
+  getLogs: ({ since = 0, minLevel = 'INFO', limit = 300, cid = '', scope = '' } = {}, options) => {
     const query = new URLSearchParams({
       since: String(since),
       min_level: minLevel,
       limit: String(limit),
     });
+    if (cid) query.set('cid', cid);
+    if (scope) query.set('scope', scope);
     return fetchApi(`/api/logs?${query}`, options);
   },
-  clearLogs: () => fetchApi('/api/logs/clear', { method: 'POST' }),
+  clearLogs: ({ scope = 'all', cid = '' } = {}) => jsonRequest('/api/logs/clear', 'POST', {
+    scope,
+    ...(cid ? { cid } : {}),
+  }),
+  setLogLevel: (level) => jsonRequest('/api/log_level', 'POST', { level }),
   serialStatus: (cid, options) => {
     const query = new URLSearchParams({ cid });
     return fetchApi(`/api/serial/status?${query}`, options);
@@ -189,5 +198,16 @@ export const api = {
   serialTools: (cid, options) => {
     const query = new URLSearchParams({ cid });
     return fetchApi(`/api/serial/tools?${query}`, options);
+  },
+  serialSend: (cid, line) => jsonRequest('/api/serial/send', 'POST', { cid, line }),
+  serialTest: (cid) => jsonRequest('/api/serial/test', 'POST', { cid }),
+  serialPwm: (cid, value) => jsonRequest('/api/serial/pwm', 'POST', { cid, value }),
+  setAutoApply: (cid, enabled) => jsonRequest('/api/auto_apply', 'POST', { cid, enabled }),
+  flashRpLatest: (cid, version) => jsonRequest('/api/rp/flash', 'POST', { cid, version }),
+  flashRpUpload: (cid, firmware) => {
+    const body = new FormData();
+    body.set('cid', cid);
+    body.set('firmware', firmware);
+    return fetchApi('/api/rp/flash_upload', { method: 'POST', body, timeoutMs: 90000 });
   },
 };
