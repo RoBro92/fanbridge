@@ -89,9 +89,10 @@ jobs:
         with:
           tag_name: ${{ env.REF_NAME }}
           name: DIY firmware ${{ env.VER_NO_V }}
-          body: 'Single-channel DIY Raspberry Pi Pico/RP2040 firmware. This is not compatible with the future six-channel custom PCB. Verify the UF2 with the attached SHA-256 file before flashing.'
+          body: 'Firmware for the single-channel DIY FanBridge Link built with an RP2040-Zero. Verify the UF2 with the attached SHA-256 file before flashing.'
           draft: false
           prerelease: false
+          make_latest: false
           files: |
             fanbridge-rp2040-${{ env.VER_NO_V }}.uf2
             fanbridge-rp2040-${{ env.VER_NO_V }}.uf2.sha256
