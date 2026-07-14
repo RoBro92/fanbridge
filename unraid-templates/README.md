@@ -23,15 +23,16 @@ Check that the output begins with the XML declaration and `<Container version="2
 | Web UI | `8080` | `8080/tcp` | FanBridge interface. |
 | AppData | `/mnt/user/appdata/fanbridge` | `/config` | Persistent settings, users, secrets, and history. |
 | Unraid emhttp | `/var/local/emhttp` | `/unraid` (read-only) | Live `/unraid/disks.ini` temperature source. |
-| Controller 1 | `/dev/serial/by-id/<controller-id>` | `/dev/ttyACM0` | First FanBridge Link serial device. |
+| Hotplug devices | `/dev` | `/host-dev` (read-only) | Stable serial discovery across reconnects. |
+| RP2040 firmware USB bus | `/dev/bus/usb` | `/dev/bus/usb` | Optional non-privileged firmware updates. |
 
 The template sets `FANBRIDGE_DISKS_STALE_WARN_SEC=600`, `FANBRIDGE_SECURE_COOKIES=0`, and host port `8080`. Change only the host side of the port mapping if `8080` is already occupied. Set secure cookies to `1` only behind HTTPS.
 
-Use the controller's stable `/dev/serial/by-id/...` host path, not a changing `/dev/ttyACM*` host number. For each additional controller, add a **Device** mapping with a different host by-id path and a distinct container target such as `/dev/ttyACM1`; select that container path in FanBridge. Do not enable privileged mode or map all of `/dev`.
+Select the controller's stable `/host-dev/serial/by-id/...` path in FanBridge, not a changing `/host-dev/ttyACM*` number. The read-only `/host-dev` path lets discovery follow USB reconnects, while the template's device-cgroup rules restrict actual device access to USB ACM serial and RP2040 BOOTSEL classes. Do not enable privileged mode.
 
-After the container starts, use **Add Controller → Scan** to refresh the exposed serial-device list. Protocol-2 DIY firmware supplies a persistent full UID and an optional LED-identify action, allowing FanBridge to match the physical board to its saved server-side settings. The display suffix in `DIY-RP2040-xxxx` is only a recognition aid; the complete UID is the binding key.
+After the container starts, use **Add Controller → Scan** to refresh the exposed serial-device list. DIY firmware 2.5.2 supplies a persistent full UID and an LED-identify action, allowing FanBridge to match the physical board to its saved server-side settings. The display suffix in `DIY-RP2040-xxxx` is only a recognition aid; the complete UID is the binding key.
 
-Docker Device mappings are fixed when the container is created. FanBridge can rebind a known UID only when the replacement path is visible inside the container. If a board is moved and its stable by-id mapping no longer resolves, correct the Unraid Device entry and restart the container.
+FanBridge rebinds a registered controller only after matching its complete persistent UID. The `/host-dev` mapping keeps replacement paths visible when a controller is unplugged, moved, or restarts during a firmware update.
 
 Map the entire `/var/local/emhttp` directory read-only. Do not add a second, overlapping bind for `disks.ini`, because a single-file bind can retain a stale inode when Unraid replaces the file.
 
@@ -47,7 +48,7 @@ Leave `FANBRIDGE_SETUP_TOKEN` blank to have FanBridge generate `/config/setup.to
 
 With the default AppData mapping, retrieve the generated token using either `docker logs FanBridge` or `cat /mnt/user/appdata/fanbridge/setup.token`, then open `http://<unraid-host>:8080/` and create the first administrator.
 
-In-container firmware flashing is hard-disabled. The template deliberately grants no USB bus, block-device, or mount access. Follow the [manual firmware guide](../fanbridge-link/README.md) from the Unraid host or a trusted workstation.
+The template supports non-privileged RP2040 firmware updates. Keep the `/dev/bus/usb` mapping to use **Controller Settings → Link Updates & Firmware**; remove that optional mapping if firmware updating from FanBridge is not required. First-time installation and source-build instructions are in the [RP2040-Zero firmware guide](../fanbridge-link/README.md).
 
 The template also makes the container root filesystem read-only and provides only a small no-exec `/tmp`; persistent writes belong under the AppData `/config` mapping.
 

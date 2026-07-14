@@ -10,7 +10,7 @@
 
 FanBridge is a Dockerised Unraid service that reads the temperature and state data written by Unraid, calculates cooling demand, and controls external PWM fan hardware over USB serial. Drives are assigned to individual controllers, so separate enclosures or cooling zones can follow their own disks without a global controller fallback.
 
-FanBridge 1.4.0 supports the single-channel DIY RP2040-Zero controller. The six-channel FanBridge Link custom PCB is represented in the application design, but its production hardware and firmware remain under development and must not use the DIY firmware image.
+FanBridge 1.4.0 supports the single-channel DIY FanBridge Link controller built around an RP2040-Zero. The current controller firmware release is 2.5.2.
 
 > [!IMPORTANT]
 > FanBridge controls physical cooling hardware. Automatic output is opt-in, unsafe or stale telemetry resolves to the configured fail-safe output, and every deployment must be validated with the actual fans, controller, USB path, and Unraid host before unattended use.
@@ -43,16 +43,13 @@ The following captures show the FanBridge 1.4.0 controller dashboard and global 
 | **Operational visibility** | Provides controller dashboards, history, authenticated logs, serial diagnostics, and authenticated Prometheus-format metrics. |
 | **Hardened first run** | Uses a one-time setup token, strong administrator passwords, login throttling, CSRF protection, hardened cookies/headers, and atomic private configuration files. |
 
-## Supported controller targets
+## Supported controller
 
 | Product | Identity | Channels | Status |
 |---|---|---:|---|
-| **DIY FanBridge Link** | `FANBRIDGE_DIY`, `rp2040-zero` | 1 | Supported by the source in `fanbridge-link/rp2040`. Firmware 2.5.2 adds persistent identity, LED identification, safe host-control leasing, and in-app verified updates. |
-| **FanBridge Link custom PCB** | Separate production identity required | 6 | Planned. Hardware design, production firmware, release stream, and speaker-based identification are not yet approved. |
+| **DIY FanBridge Link** | `FANBRIDGE_DIY`, `rp2040-zero` | 1 | Firmware 2.5.2 with persistent identity, LED identification, safe host-control leasing, and verified updates from FanBridge. |
 
-The two products require separate board identities, build targets, versions, compatibility gates, and release artifacts. Never flash `fanbridge-rp2040-*.uf2` to the future six-channel custom PCB.
-
-See the [controller firmware and wiring guide](fanbridge-link/README.md) and the [custom-PCB engineering specification](hardware/fanbridge_link_spec.md).
+See the [RP2040-Zero hardware, installation, and firmware build guide](fanbridge-link/README.md).
 
 ## Install on Unraid
 
@@ -74,12 +71,12 @@ Confirm the output starts with the XML declaration and `<Container version="2">`
 |---|---|---|---|
 | **AppData** | `/mnt/user/appdata/fanbridge` | `/config` | Read/write |
 | **Unraid emhttp** | `/var/local/emhttp` | `/unraid` | Read-only |
-| **Controller 1** | `/dev/serial/by-id/<controller-id>` | `/dev/ttyACM0` | Device |
-| **Controller 2** | A different `/dev/serial/by-id/<controller-id>` | `/dev/ttyACM1` | Device |
+| **Hotplug devices** | `/dev` | `/host-dev` | Read-only path view; device access remains limited by cgroup rules. |
+| **Firmware USB bus** | `/dev/bus/usb` | `/dev/bus/usb` | Read/write; required for in-app RP2040 updates. |
 
 The template also sets the Web UI to host port `8080`, `FANBRIDGE_DISKS_STALE_WARN_SEC=600`, and `FANBRIDGE_SECURE_COOKIES=0`. Change the host port if `8080` is already occupied. Set secure cookies to `1` only when the Web UI is served through HTTPS.
 
-Add further controllers with distinct container paths such as `/dev/ttyACM2`. Do not enable privileged mode, expose all of `/dev`, or create a second overlapping bind for `/unraid/disks.ini`.
+The template permits only USB ACM serial devices and RP2040 BOOTSEL USB devices through its cgroup rules. Do not enable privileged mode or create a second overlapping bind for `/unraid/disks.ini`.
 
 Map the entire `/var/local/emhttp` directory because Unraid may replace `disks.ini` atomically. A bind to only the old file inode can silently stop receiving updates.
 
@@ -96,7 +93,7 @@ Full template instructions are in [unraid-templates/README.md](unraid-templates/
    ```
 
 3. Create the first administrator with the setup token and a password of at least 8 characters.
-4. Pass each physical controller into the container using its stable host `/dev/serial/by-id/...` path.
+4. Confirm the template exposes `/dev` at `/host-dev` and select the controller's stable `/host-dev/serial/by-id/...` path.
 5. In **Add Controller**, press **Scan**, select a detected device, and use **Identify** when supported before adding it.
 6. Open **Settings → Drive Assignment** and assign each disk to one specific controller or **Not Included**.
 7. Review curves and fail-safe behaviour before enabling automatic output.
@@ -111,12 +108,12 @@ Firmware 2.5.2 presents a recognition label in the form `DIY-RP2040-xxxx`. The f
 
 If a board moves to a different host USB port:
 
-- A stable `/dev/serial/by-id/...` host mapping is still preferred.
+- A stable `/host-dev/serial/by-id/...` path is preferred.
 - FanBridge can rebind an exposed device only after an exact full-UID match.
-- Docker cannot see a host device that was never passed into the container; correct the Device mapping and restart the container when necessary.
+- The template's `/host-dev` mapping follows hotplug and device-path changes without making the container privileged.
 - Legacy protocol-1 firmware remains bound to its configured container path and should be upgraded before unattended use.
 
-The Add Controller **Identify** action is deliberately bounded. For DIY firmware 2.5.2 it flashes the RP2040-Zero onboard WS2812 orange for ten seconds without creating or renewing the PWM control lease. Speaker identification for the custom PCB is not implemented.
+The Add Controller **Identify** action flashes the selected RP2040-Zero onboard WS2812 orange for ten seconds without creating or renewing the PWM control lease.
 
 ## Temperature polling and fail-safe behaviour
 
@@ -138,10 +135,13 @@ docker run -d \
   --cap-drop=ALL \
   --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+  --device-cgroup-rule='c 166:* rmw' \
+  --device-cgroup-rule='c 189:* rmw' \
   -p 8080:8080 \
   -v /mnt/user/appdata/fanbridge:/config \
   -v /var/local/emhttp:/unraid:ro \
-  --device=/dev/serial/by-id/REPLACE_WITH_YOUR_CONTROLLER:/dev/ttyACM0 \
+  -v /dev:/host-dev:ro \
+  -v /dev/bus/usb:/dev/bus/usb:rw \
   -e FANBRIDGE_DISKS_STALE_WARN_SEC=600 \
   ghcr.io/robrolabs/fanbridge:latest
 ```
@@ -162,9 +162,9 @@ Do not set multiple Gunicorn workers. Controller sessions, state, and scheduling
 
 The controller configuration page can update a registered DIY RP2040 without privileged mode when `/dev/bus/usb` and the USB character-device rule from the Unraid template are present. Fan output is held at 100% while the controller enters BOOTSEL, the image is written, and its protocol identity is checked after restart.
 
-Remote installation is intentionally restricted to the fixed `RoBroLabs/fanbridge` GitHub release path. FanBridge ignores releases older than the 2.5.0 safety baseline, drafts, prereleases, and any release without both the target-specific UF2 and its SHA-256 companion. The protected firmware workflow publishes that pair only for the version approved by the hardware-in-the-loop release gate. A local hardware-verified UF2 can also be uploaded through the same panel.
+Remote installation is restricted to the `RoBroLabs/fanbridge` GitHub releases. FanBridge ignores releases older than the 2.5.0 safety baseline, drafts, prereleases, and releases without both the RP2040 UF2 and its SHA-256 companion. A local RP2040 UF2 can also be uploaded through the same panel.
 
-When an approved final DIY release is available, **Install latest approved firmware** offers it only after validating the target-specific asset and checksum. The older 2.1.0 and 2.2.0 releases are never offered. The future six-channel official PCB requires its own firmware identity and release channel and cannot use the DIY image. The checksum-verified host procedure remains documented in [fanbridge-link/README.md](fanbridge-link/README.md) as a recovery path.
+Firmware 2.5.2 is the current supported release. Select **Check for updates**, then **Install firmware 2.5.2**; FanBridge verifies the published checksum before flashing and confirms the controller identity after restart. The checksum-verified first-install and source-build procedures are documented in [fanbridge-link/README.md](fanbridge-link/README.md).
 
 ## Security boundary
 
@@ -209,7 +209,6 @@ The pull-request workflow additionally compiles the RP2040 firmware, audits Pyth
 | `container/services/` | Unraid disk parsing, history, PWM policy, and serial discovery/transactions. |
 | `frontend/` | Browser application source; Vite builds the production assets. |
 | `fanbridge-link/rp2040/` | Single-channel DIY RP2040-Zero firmware source. |
-| `hardware/` | Six-channel custom-PCB requirements and design material. |
 | `unraid-templates/` | Unraid version 2 Docker template and installation guide. |
 | `tests/` | Backend policy, migration, authentication, identity, and security regression tests. |
 
