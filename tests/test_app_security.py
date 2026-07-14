@@ -598,6 +598,71 @@ def test_maintenance_raw_console_cannot_bypass_verified_pwm_path(monkeypatch):
     assert "read-only" in response.get_json()["error"]
 
 
+def test_serial_apis_do_not_expose_internal_exception_details(monkeypatch):
+    client, headers = _authenticated_client()
+    sentinel = "SENTINEL stack /private/device/path"
+    disconnected = {
+        "connected": False,
+        "message": sentinel,
+        "preferred": "/dev/ttyACM0",
+    }
+    monkeypatch.setattr(
+        fanbridge.serial_svc,
+        "get_serial_status",
+        lambda *_args, **_kwargs: dict(disconnected),
+    )
+
+    status_response = client.get("/api/serial/status?cid=left")
+    tools_response = client.get("/api/serial/tools?cid=left")
+    assert status_response.status_code == 200
+    assert tools_response.status_code == 200
+    assert sentinel not in status_response.get_data(as_text=True)
+    assert sentinel not in tools_response.get_data(as_text=True)
+
+    monkeypatch.setenv("FANBRIDGE_MAINTENANCE_MODE", "1")
+    unavailable = client.post(
+        "/api/serial/send",
+        json={"cid": "left", "line": "PING"},
+        headers=headers,
+    )
+    assert unavailable.status_code == 409
+    assert unavailable.get_json()["error"] == "controller unavailable or identity not verified"
+    assert sentinel not in unavailable.get_data(as_text=True)
+
+    monkeypatch.setattr(
+        fanbridge.serial_svc,
+        "get_serial_status",
+        lambda *_args, **_kwargs: {"connected": True, "message": sentinel},
+    )
+    connected_status = client.get("/api/serial/status?cid=left")
+    assert sentinel not in connected_status.get_data(as_text=True)
+    monkeypatch.setattr(
+        fanbridge.serial_svc,
+        "serial_send_line",
+        lambda *_args, **_kwargs: {"ok": False, "error": sentinel},
+    )
+    failed_diagnostic = client.post(
+        "/api/serial/send",
+        json={"cid": "left", "line": "PING"},
+        headers=headers,
+    )
+    assert failed_diagnostic.status_code == 502
+    assert sentinel not in failed_diagnostic.get_data(as_text=True)
+
+    monkeypatch.setattr(
+        fanbridge.serial_svc,
+        "serial_set_pwm_percent",
+        lambda *_args, **_kwargs: {"ok": False, "error": sentinel},
+    )
+    failed_pwm = client.post(
+        "/api/serial/pwm",
+        json={"cid": "left", "value": 50},
+        headers=headers,
+    )
+    assert failed_pwm.status_code == 400
+    assert sentinel not in failed_pwm.get_data(as_text=True)
+
+
 def test_log_diagnostics_do_not_command_a_quarantined_legacy_controller(monkeypatch):
     client, _headers = _authenticated_client()
     monkeypatch.setattr(

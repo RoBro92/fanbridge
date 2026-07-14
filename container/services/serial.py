@@ -225,6 +225,18 @@ def _log() -> logging.Logger:
     return _GLOBAL_LOGGER or logging.getLogger("fanbridge")
 
 
+def _public_serial_exception(exc: BaseException) -> str:
+    """Map an internal serial exception to a bounded operator-safe message."""
+    error_number = getattr(exc, "errno", None)
+    if isinstance(exc, PermissionError) or error_number in {1, 13}:
+        return "permission denied opening configured serial device"
+    if isinstance(exc, FileNotFoundError) or error_number in {2, 6, 19}:
+        return "configured serial device is unavailable"
+    if error_number == 16:
+        return "configured serial device is busy"
+    return "serial device operation failed; see server logs"
+
+
 def _unique_order(seq):
     seen = set()
     out = []
@@ -270,8 +282,7 @@ def probe_serial_open(port: str, baud: int):
             finally:
                 s.close()
             return ok, "ok"
-    except Exception as e:
-        msg = str(e)
+    except Exception as exc:
         try:
             if port.startswith("/dev/tty."):
                 cu_port = "/dev/cu." + port.split("/dev/tty.", 1)[1]
@@ -285,16 +296,13 @@ def probe_serial_open(port: str, baud: int):
                     return ok2, f"ok ({cu_port})"
         except Exception:
             pass
-        lower = msg.lower()
-        if any(k in lower for k in ("permission", "denied", "operation not permitted")):
-            msg = f"{msg} (hint: map the device into the container using --device={port})"
         try:
-            _log().warning("serial open failed | port=%s baud=%s err=%s", port, baud, msg)
+            _log().warning("serial open failed | port=%s baud=%s err=%s", port, baud, exc)
             if _GLOBAL_INC_OPEN_FAIL:
                 _GLOBAL_INC_OPEN_FAIL()
         except Exception:
             pass
-        return False, msg
+        return False, _public_serial_exception(exc)
 
 
 _IDENTITY_RE = re.compile(
@@ -530,7 +538,11 @@ def identify_unregistered_controller(
                 s.close()
     except Exception as exc:
         _log().warning("controller identify failed | port=%s err=%s", selected_port, exc)
-        return {"ok": False, "error": str(exc), "code": "serial_error"}
+        return {
+            "ok": False,
+            "error": _public_serial_exception(exc),
+            "code": "serial_error",
+        }
 
 
 def _activate_port(ctx: _Ctx, port: str, details: dict | None = None) -> None:
@@ -735,15 +747,17 @@ def open_serial(cid: str, timeout: float = 1.0) -> tuple[SerialProto | None, str
             pass
         ctx.last_good = getattr(s_proto, "port", port)
         return s_proto, None
-    except Exception as e:
-        last_err = str(e)
+    except Exception as exc:
         try:
-            _log().warning("serial open failed | cid=%s port=%s baud=%s err=%s", cid, port, ctx.baud, last_err)
+            _log().warning(
+                "serial open failed | cid=%s port=%s baud=%s err=%s",
+                cid, port, ctx.baud, exc,
+            )
             if _GLOBAL_INC_OPEN_FAIL:
                 _GLOBAL_INC_OPEN_FAIL()
         except Exception:
             pass
-        return None, last_err
+        return None, _public_serial_exception(exc)
 
 
 def serial_send_line(cid: str, line: str, expect_reply: bool = True, timeout: float = 1.0) -> dict:
@@ -791,8 +805,9 @@ def serial_send_line(cid: str, line: str, expect_reply: bool = True, timeout: fl
             out["ok"] = True
             record("ok")
             return out
-        except Exception as e:
-            out["error"] = str(e)
+        except Exception as exc:
+            _log().warning("serial transaction failed | cid=%s err=%s", cid, exc)
+            out["error"] = _public_serial_exception(exc)
             record("error")
             return out
         finally:

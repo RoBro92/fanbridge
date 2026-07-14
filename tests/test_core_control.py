@@ -787,6 +787,28 @@ def test_serial_expected_reply_cannot_succeed_silently(monkeypatch):
     assert result["error"] == "no reply from controller"
 
 
+def test_serial_exceptions_are_logged_but_return_bounded_public_errors(monkeypatch, caplog):
+    sentinel = "SENTINEL stack /private/device/path"
+
+    class ExplodingSerial:
+        def __init__(self, *_args, **_kwargs):
+            raise OSError(5, sentinel)
+
+    monkeypatch.setattr(serial_svc, "serial", SimpleNamespace(Serial=ExplodingSerial))
+    assert serial_svc.register_controller("left", "/dev/ttyACM0", 115200)
+
+    opened, probe_error = serial_svc.probe_serial_open("/dev/ttyACM0", 115200)
+    result = serial_svc.serial_send_line("left", "PING")
+
+    assert opened is False
+    assert probe_error == "serial device operation failed; see server logs"
+    assert result["ok"] is False
+    assert result["error"] == "serial device operation failed; see server logs"
+    assert sentinel not in probe_error
+    assert sentinel not in result["error"]
+    assert sentinel in caplog.text
+
+
 def test_serial_pwm_rejects_out_of_range_instead_of_clamping(monkeypatch):
     monkeypatch.setattr(serial_svc, "serial", SimpleNamespace(Serial=FakeSerial))
     assert serial_svc.register_controller("left", "/dev/ttyACM0", 115200)

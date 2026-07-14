@@ -4,6 +4,13 @@ from services import serial as serial_svc
 
 bp = Blueprint("serial", __name__)
 _CID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+_UNAVAILABLE_ERROR = "controller unavailable or identity not verified"
+
+
+def _public_status(status: dict) -> dict:
+    public = dict(status)
+    public["message"] = "connected" if public.get("connected") else _UNAVAILABLE_ERROR
+    return public
 
 
 @bp.get("/status")
@@ -11,7 +18,7 @@ def serial_status():
     cid = request.args.get("cid")
     if not isinstance(cid, str) or not _CID_RE.fullmatch(cid):
         return jsonify({"ok": False, "error": "valid cid parameter required"}), 400
-    return jsonify(serial_svc.get_serial_status(cid, full=True))
+    return jsonify(_public_status(serial_svc.get_serial_status(cid, full=True)))
 
 
 @bp.get("/tools")
@@ -33,10 +40,15 @@ def api_serial_tools():
                 "error": None,
             }
         else:
-            checks["ping"] = {"ok": False, "ms": dt, "reply": res.get("reply"), "error": res.get("error")}
+            checks["ping"] = {
+                "ok": False,
+                "ms": dt,
+                "reply": res.get("reply"),
+                "error": "serial diagnostic command failed",
+            }
     else:
         checks["ping"] = {"ok": False, "ms": None, "reply": None, "error": "not connected"}
-    return jsonify({"status": status, "checks": checks})
+    return jsonify({"status": _public_status(status), "checks": checks})
 
 
 @bp.post("/send")
@@ -71,11 +83,14 @@ def api_serial_send():
     if not status.get("connected"):
         return jsonify({
             "ok": False,
-            "error": status.get("message") or "controller identity is not verified",
+            "error": _UNAVAILABLE_ERROR,
         }), 409
     res = serial_svc.serial_send_line(cid, line, expect_reply=True)
     if not res.get("ok"):
-        return jsonify(res), 502
+        return jsonify({
+            "ok": False,
+            "error": "serial diagnostic command failed",
+        }), 502
     return jsonify(res)
 
 
@@ -91,4 +106,9 @@ def api_serial_pwm():
         return jsonify({"ok": False, "error": "valid cid is required"}), 400
     res = serial_svc.serial_set_pwm_percent(cid, data.get("value"))
     code = 200 if res.get("ok") else 400
+    if not res.get("ok"):
+        return jsonify({
+            "ok": False,
+            "error": "manual PWM command failed",
+        }), code
     return jsonify(res), code
