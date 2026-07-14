@@ -1,6 +1,6 @@
 # DIY FanBridge Link for RP2040-Zero
 
-The DIY FanBridge Link is the supported single-channel controller for FanBridge. It uses an RP2040-Zero to generate the 25 kHz control signal required by a four-wire PWM fan and communicates with the FanBridge Docker application over USB serial.
+The DIY FanBridge Link is the supported single channel controller for FanBridge. It uses an RP2040-Zero to generate the 25 kHz control signal required by a four wire PWM fan and communicates with the FanBridge Docker application over USB serial.
 
 Current firmware: **[2.5.2](https://github.com/RoBroLabs/fanbridge/releases/tag/fw-v2.5.2)**
 
@@ -11,11 +11,11 @@ You need:
 - One RP2040-Zero with the onboard WS2812 connected to GPIO16.
 - One 2N3904 NPN transistor.
 - One approximately 1 kΩ base resistor.
-- One 10 kΩ base-to-emitter resistor.
-- A four-wire PWM fan or PWM fan hub and its correctly rated 12 V supply.
+- One 10 kΩ base to emitter resistor.
+- A four wire PWM fan or PWM fan hub and its correctly rated 12 V supply.
 - A common ground between the RP2040, transistor circuit, and fan supply.
 
-Check the lead order in the datasheet for the exact transistor you use; 2N3904 package pinouts vary between manufacturers.
+Check the lead order in the datasheet for the exact transistor you use. 2N3904 package pinouts vary between manufacturers.
 
 ## Wiring
 
@@ -29,9 +29,9 @@ Check the lead order in the datasheet for the exact transistor you use; 2N3904 p
 | Fan pin 2 | Correctly rated 12 V supply |
 | Fan pin 3 | Not connected; this controller has no tachometer input |
 
-Do not connect 12 V to an RP2040 GPIO or USB VBUS. Do not drive the fan PWM wire directly from a push-pull 3.3 V GPIO. The external 10 kΩ resistor is required so the transistor remains off and the fan PWM input is released while the board is unpowered, resetting, or in BOOTSEL mode.
+Do not connect 12 V to an RP2040 GPIO or USB VBUS. Do not drive the fan PWM wire directly from a push pull 3.3 V GPIO. The external 10 kΩ resistor is required so the transistor remains off and the fan PWM input is released while the board is unpowered, resetting, or in BOOTSEL mode.
 
-The fan or hub must run at its safe/full speed when its PWM input is released.
+The fan or hub must run at its safe or full speed when its PWM input is released.
 
 ## Install firmware on a new controller
 
@@ -52,15 +52,17 @@ On macOS:
 shasum -a 256 -c fanbridge-rp2040-2.5.2.uf2.sha256
 ```
 
-On Windows, compare the result from the following command with the digest written in the `.sha256` file:
+On Windows, compare the result from this command with the digest in the `.sha256` file:
 
 ```powershell
 Get-FileHash .\fanbridge-rp2040-2.5.2.uf2 -Algorithm SHA256
 ```
 
-Hold the RP2040-Zero **BOOTSEL** button while connecting its USB cable. A drive named `RPI-RP2` appears. Copy `fanbridge-rp2040-2.5.2.uf2` to that drive; the controller programs itself and restarts automatically.
+Hold the RP2040-Zero **BOOTSEL** button while connecting its USB cable. A drive named `RPI-RP2` appears. Copy `fanbridge-rp2040-2.5.2.uf2` to that drive. The controller programs itself and restarts automatically.
 
-Connect the controller to the Unraid server, open FanBridge, then use **Add Controller → Scan**. The device presents as `DIY-RP2040-xxxx`; press **Identify** to flash its onboard LED before adding it.
+Connect the controller to the Unraid server, open FanBridge, and use **Add Controller → Scan**. The device presents as `DIY-RP2040-xxxx`. Press **Identify** to flash its onboard LED before adding it.
+
+A separate browser based installer for first time RP2040 setup is planned for the FanBridge website. It is not currently available, so use the BOOTSEL procedure above.
 
 ## Update an installed controller from FanBridge
 
@@ -73,7 +75,7 @@ The current Unraid template exposes `/dev/bus/usb` and the required USB device c
 
 FanBridge verifies the release checksum, commands the registered controller into BOOTSEL, holds cooling demand at 100%, writes the image with `picotool`, and verifies the same controller identity after restart. A locally built or downloaded RP2040 UF2 can instead be installed with **Upload verified .uf2**.
 
-If USB firmware access has been removed from the container, stop FanBridge and use the BOOTSEL copy procedure above from a trusted computer.
+If USB firmware access has been removed from the container, stop FanBridge and use the physical BOOTSEL procedure from a trusted computer.
 
 ## Build from source
 
@@ -98,21 +100,21 @@ Install that file using **Upload verified .uf2** in FanBridge or the physical BO
 ## Firmware behaviour
 
 - Starts with the fan request at 100%.
-- Produces an inverted, open-collector 25 kHz PWM control signal on `GP15`.
-- Accepts numeric PWM targets from `0` to `100` over 115200-baud USB serial.
+- Produces an inverted, open collector 25 kHz PWM control signal on `GP15`.
+- Accepts numeric PWM targets from `0` to `100` over 115200 baud USB serial.
 - Returns to 100% if FanBridge does not renew the control lease for 60 seconds.
-- Uses the RP2040 hardware watchdog to recover to the full-speed startup state after a software stall.
-- Reports a persistent 16-character hardware UID so FanBridge can retain settings when USB paths change.
+- Uses the RP2040 hardware watchdog to recover to the full speed startup state after a software stall.
+- Reports a persistent 16 character hardware UID so FanBridge can retain settings when USB paths change.
 - Presents the readable name `DIY-RP2040-xxxx`, where the suffix is a recognition aid derived from the UID.
 - Flashes the GPIO16 onboard WS2812 for ten seconds when it receives `IDENTIFY`.
 - Supports serial `BOOTSEL` entry for verified updates from FanBridge.
-- Does not provide tachometer/RPM feedback.
+- Does not provide tachometer or RPM feedback.
 
 ## Serial commands
 
 | Command | Behaviour |
 |---|---|
-| `0` through `100` | Set PWM percentage and renew the 60-second control lease. |
+| `0` through `100` | Set PWM percentage and renew the 60 second control lease. |
 | `PING` | Return `PONG`. |
 | `VERSION` | Return the firmware version. |
 | `ID?` | Return product, protocol, board, channel count, and full UID. |
@@ -122,6 +124,6 @@ Install that file using **Upload verified .uf2** in FanBridge or the physical BO
 | `RPM?` | Report that tachometer feedback is unsupported. |
 | `BOOTSEL` | Release the fan input, turn off the LED, and reboot into RP2040 BOOTSEL mode. |
 
-FanBridge controller names, drive assignments, fan curves, and settings remain server-side and are bound to the complete hardware UID.
+FanBridge controller names, drive assignments, fan curves, and settings remain on the server and are bound to the complete hardware UID.
 
-See [CHANGELOG.md](CHANGELOG.md) for firmware history and the main [FanBridge README](../README.md) for Docker and Unraid installation.
+See [CHANGELOG.md](CHANGELOG.md) for firmware history, the [Unraid installation guide](../unraid-templates/README.md) for Docker setup, and the [FanBridge overview](../README.md) for the current product interface.

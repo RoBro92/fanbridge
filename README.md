@@ -2,214 +2,54 @@
   <img src="container/static/fanbridge.png" alt="FanBridge logo" width="120" />
 </p>
 
-<h1 align="center">FanBridge</h1>
+<h1 align="center">FanBridge for Unraid</h1>
 
 <p align="center">
-  Unraid disk temperatures in. Safe, controller-specific PWM demand out.
+  Unraid disk temperatures in. Safe, controller specific PWM out.
 </p>
 
-FanBridge is a Dockerised Unraid service that reads the temperature and state data written by Unraid, calculates cooling demand, and controls external PWM fan hardware over USB serial. Drives are assigned to individual controllers, so separate enclosures or cooling zones can follow their own disks without a global controller fallback.
+FanBridge is a Dockerised Unraid service that reads disk temperature and state data from Unraid, calculates cooling demand, and controls external PWM fan hardware over USB serial. Drives can be assigned to separate controllers so each enclosure or cooling zone follows the disks it contains.
 
-FanBridge 1.4.0 supports the single-channel DIY FanBridge Link controller built around an RP2040-Zero. The current controller firmware release is 2.5.2.
+FanBridge 1.4.0 supports the single channel DIY FanBridge Link built around an RP2040-Zero. The current controller firmware release is 2.5.2.
 
 > [!IMPORTANT]
-> FanBridge controls physical cooling hardware. Automatic output is opt-in, unsafe or stale telemetry resolves to the configured fail-safe output, and every deployment must be validated with the actual fans, controller, USB path, and Unraid host before unattended use.
+> FanBridge controls physical cooling hardware. Automatic output is opt in. Validate every deployment with its actual fans, controller, USB connection, and Unraid host before leaving it unattended.
 
 ## Current interface
 
-The following captures show the FanBridge 1.4.0 controller dashboard and global drive-assignment workflow. Values shown in the captures are local test telemetry; production images do not generate demo controller, disk, history, or log data.
-
-### Controller telemetry
+### Controller dashboard
 
 <p align="center">
-  <img src="docs/images/dashboard-diy-rp2040.png" alt="FanBridge DIY RP2040 controller telemetry dashboard" width="1000" />
+  <img src="docs/images/dashboard-diy-rp2040.png" alt="FanBridge DIY RP2040 controller dashboard" width="1000" />
 </p>
 
-### Per-controller drive assignments
+### Global drive assignments
 
 <p align="center">
-  <img src="docs/images/drive-assignments.png" alt="FanBridge global drive assignment screen with disk serial numbers and capacities" width="1000" />
+  <img src="docs/images/drive-assignments.png" alt="FanBridge global drive assignment screen" width="1000" />
 </p>
 
 ## What FanBridge does
 
 | Capability | Behaviour |
 |---|---|
-| **Unraid temperature input** | Reads `/unraid/disks.ini`, including drive identity, state, type, temperature, serial number, and capacity. FanBridge does not query SMART directly. |
-| **Controller-specific zones** | Assigns each disk to one controller or leaves it unassigned. There is no global/all-controllers assignment. |
-| **Temperature-to-PWM policy** | Uses separate HDD and SSD curves, hottest-drive demand, hysteresis, single-drive overrides, and configurable idle/fail-safe output. |
-| **Persistent hardware identity** | Protocol-2 DIY firmware exposes a full flash UID. FanBridge stores settings against that UID and can rebind the board after a USB device-path change. |
-| **Safe host ownership** | One process owns controller sessions and runs the background control loop. Browser requests only read state or submit explicit configuration changes. |
-| **Operational visibility** | Provides controller dashboards, history, authenticated logs, serial diagnostics, and authenticated Prometheus-format metrics. |
-| **Hardened first run** | Uses a one-time setup token, strong administrator passwords, login throttling, CSRF protection, hardened cookies/headers, and atomic private configuration files. |
+| **Unraid disk data** | Reads drive identity, state, type, temperature, serial number, and capacity from `/unraid/disks.ini`. |
+| **Controller specific cooling** | Assigns each disk to one controller or leaves it out of FanBridge control. |
+| **Temperature based PWM** | Uses separate HDD and SSD curves, the hottest assigned drive, hysteresis, overrides, and configurable idle and fail safe output. |
+| **Persistent controller identity** | Stores controller settings against the full hardware UID and restores them after a USB path change. |
+| **Monitoring and diagnostics** | Provides dashboards, history, logs, serial diagnostics, and authenticated metrics. |
 
 ## Supported controller
 
 | Product | Identity | Channels | Status |
 |---|---|---:|---|
-| **DIY FanBridge Link** | `FANBRIDGE_DIY`, `rp2040-zero` | 1 | Firmware 2.5.2 with persistent identity, LED identification, safe host-control leasing, and verified updates from FanBridge. |
+| **DIY FanBridge Link** | `FANBRIDGE_DIY`, `rp2040-zero` | 1 | Firmware 2.5.2 with persistent identity, LED identification, safe control leasing, and verified updates from FanBridge. |
 
-See the [RP2040-Zero hardware, installation, and firmware build guide](fanbridge-link/README.md).
+## Documentation
 
-## Install on Unraid
-
-FanBridge is not currently available in the public Community Applications feed while its listing is migrated. Install the version 2 template manually from an Unraid terminal:
-
-```bash
-mkdir -p /boot/config/plugins/dockerMan/templates-user
-curl --fail --location --proto '=https' --tlsv1.2 \
-  --output /boot/config/plugins/dockerMan/templates-user/my-fanbridge.xml \
-  https://raw.githubusercontent.com/RoBroLabs/fanbridge/main/unraid-templates/templates/my-fanbridge.xml
-head -n 2 /boot/config/plugins/dockerMan/templates-user/my-fanbridge.xml
-```
-
-Confirm the output starts with the XML declaration and `<Container version="2">`, then open **Docker → Add Container**, select **FanBridge** from the template list, and leave **Privileged** off. The template pulls the stable `ghcr.io/robrolabs/fanbridge:latest` image; its settings match the Community Applications submission.
-
-### Required mappings
-
-| Setting | Host value | Container value | Access |
-|---|---|---|---|
-| **AppData** | `/mnt/user/appdata/fanbridge` | `/config` | Read/write |
-| **Unraid emhttp** | `/var/local/emhttp` | `/unraid` | Read-only |
-| **Hotplug devices** | `/dev` | `/host-dev` | Read-only path view; device access remains limited by cgroup rules. |
-| **Firmware USB bus** | `/dev/bus/usb` | `/dev/bus/usb` | Read/write; required for in-app RP2040 updates. |
-
-The template also sets the Web UI to host port `8080`, `FANBRIDGE_DISKS_STALE_WARN_SEC=600`, and `FANBRIDGE_SECURE_COOKIES=0`. Change the host port if `8080` is already occupied. Set secure cookies to `1` only when the Web UI is served through HTTPS.
-
-The template permits only USB ACM serial devices and RP2040 BOOTSEL USB devices through its cgroup rules. Do not enable privileged mode or create a second overlapping bind for `/unraid/disks.ini`.
-
-Map the entire `/var/local/emhttp` directory because Unraid may replace `disks.ini` atomically. A bind to only the old file inode can silently stop receiving updates.
-
-Full template instructions are in [unraid-templates/README.md](unraid-templates/README.md).
-
-## First run
-
-1. Start the container and open `http://<unraid-host>:8080/`.
-2. If `FANBRIDGE_SETUP_TOKEN` was not preset, retrieve the generated token from the container log or the mapped AppData directory:
-
-   ```bash
-   docker logs FanBridge
-   cat /mnt/user/appdata/fanbridge/setup.token
-   ```
-
-3. Create the first administrator with the setup token and a password of at least 8 characters.
-4. Confirm the template exposes `/dev` at `/host-dev` and select the controller's stable `/host-dev/serial/by-id/...` path.
-5. In **Add Controller**, press **Scan**, select a detected device, and use **Identify** when supported before adding it.
-6. Open **Settings → Drive Assignment** and assign each disk to one specific controller or **Not Included**.
-7. Review curves and fail-safe behaviour before enabling automatic output.
-
-FanBridge removes its generated setup-token file after the first administrator is created. Treat `/config` as sensitive because it also stores the administrator database, session secret, configuration, history, and controller identities.
-
-## Controller identity and USB reconnects
-
-DIY firmware 2.4.0 and newer returns a full 16-character flash UID during `ID?`. FanBridge uses the complete UID—not the display name or the four-character suffix—as the binding key for the controller's name, drive assignments, curves, and settings.
-
-Firmware 2.5.2 presents a recognition label in the form `DIY-RP2040-xxxx`. The final four hexadecimal characters are useful for matching a physical board to the UI but are not globally unique.
-
-If a board moves to a different host USB port:
-
-- A stable `/host-dev/serial/by-id/...` path is preferred.
-- FanBridge can rebind an exposed device only after an exact full-UID match.
-- The template's `/host-dev` mapping follows hotplug and device-path changes without making the container privileged.
-- Legacy protocol-1 firmware remains bound to its configured container path and should be upgraded before unattended use.
-
-The Add Controller **Identify** action flashes the selected RP2040-Zero onboard WS2812 orange for ten seconds without creating or renewing the PWM control lease.
-
-## Temperature polling and fail-safe behaviour
-
-FanBridge consumes the last sample written by Unraid. In **Settings → Disk Settings**, set **Tunable (poll_attributes)** to approximately 300 seconds and leave `FANBRIDGE_DISKS_STALE_WARN_SEC` near 600 seconds unless your installation has been deliberately qualified with another cadence.
-
-The browser's refresh interval does not change how often Unraid queries drive attributes. When automatic output is enabled, the background control loop independently refreshes the controller command before the firmware's 60-second control lease expires.
-
-Missing, malformed, stale, or incomplete active-drive telemetry is unsafe and produces the configured fail-safe demand. Sleeping or unassigned disks follow the idle policy instead. Verify these cases on the real server before relying on automatic control.
-
-Manual mode bypasses temperature curves, but it does not bypass FanBridge's mandatory safety layer. A critical assigned-drive temperature, missing or stale active-drive telemetry, or an unhealthy control loop forces a controller-acknowledged 100% command. Critical-temperature protection remains latched until temperatures clear the configured threshold by 3°C. The DIY controller has no tachometer input, so an acknowledgement confirms the PWM target was accepted—not that the physical fan is spinning; validate the fan and electrical path before relying on unattended control.
-
-## Docker CLI example
-
-```bash
-docker run -d \
-  --name fanbridge \
-  --restart unless-stopped \
-  --security-opt=no-new-privileges \
-  --cap-drop=ALL \
-  --read-only \
-  --tmpfs /tmp:rw,noexec,nosuid,size=16m \
-  --device-cgroup-rule='c 166:* rmw' \
-  --device-cgroup-rule='c 189:* rmw' \
-  -p 8080:8080 \
-  -v /mnt/user/appdata/fanbridge:/config \
-  -v /var/local/emhttp:/unraid:ro \
-  -v /dev:/host-dev:ro \
-  -v /dev/bus/usb:/dev/bus/usb:rw \
-  -e FANBRIDGE_DISKS_STALE_WARN_SEC=600 \
-  ghcr.io/robrolabs/fanbridge:latest
-```
-
-Useful deployment variables:
-
-| Variable | Default | Purpose |
-|---|---:|---|
-| `FANBRIDGE_SETUP_TOKEN` | Generated | Optional first-run bootstrap token. Prefer leaving it unset for an interactive installation. |
-| `FANBRIDGE_DISKS_STALE_WARN_SEC` | `600` | Age at which the Unraid temperature source becomes unsafe. |
-| `FANBRIDGE_SECURE_COOKIES` | `0` | Set to `1` only when users reach FanBridge exclusively over HTTPS. |
-| `GUNICORN_THREADS` | `4` | Concurrent request threads within the single hardware-owning process. |
-| `GUNICORN_TIMEOUT` | `30` | Gunicorn request timeout in seconds. |
-
-Do not set multiple Gunicorn workers. Controller sessions, state, and scheduling are process-local by design.
-
-## Firmware updates
-
-The controller configuration page can update a registered DIY RP2040 without privileged mode when `/dev/bus/usb` and the USB character-device rule from the Unraid template are present. Fan output is held at 100% while the controller enters BOOTSEL, the image is written, and its protocol identity is checked after restart.
-
-Remote installation is restricted to the `RoBroLabs/fanbridge` GitHub releases. FanBridge ignores releases older than the 2.5.0 safety baseline, drafts, prereleases, and releases without both the RP2040 UF2 and its SHA-256 companion. A local RP2040 UF2 can also be uploaded through the same panel.
-
-Firmware 2.5.2 is the current supported release. Select **Check for updates**, then **Install firmware 2.5.2**; FanBridge verifies the published checksum before flashing and confirms the controller identity after restart. The checksum-verified first-install and source-build procedures are documented in [fanbridge-link/README.md](fanbridge-link/README.md).
-
-## Security boundary
-
-- Keep the Web UI on a trusted LAN or behind an authenticated HTTPS reverse proxy.
-- Do not expose the plain HTTP service directly to the internet.
-- Back up `/config`, restrict its host permissions, and never copy it into an image or support bundle.
-- `/api/metrics` is protected by the normal login session; FanBridge does not currently issue a dedicated scraper token.
-- Report vulnerabilities privately using the process in [SECURITY.md](SECURITY.md).
-
-## Local development and validation
-
-Build and run the current source locally:
-
-```bash
-docker compose up --build
-```
-
-Without `/unraid/disks.ini` or a passed-through serial device, FanBridge starts safely and reports those inputs as unavailable. Production images do not ship simulated disk or controller data.
-
-Run the main validation gates:
-
-```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -r container/requirements.txt pytest==9.1.1
-python -m pytest -q
-
-cd frontend
-npm ci --ignore-scripts
-npm audit --audit-level=high
-npm run build
-```
-
-The pull-request workflow additionally compiles the RP2040 firmware, audits Python dependencies, runs Bandit and flake8 safety checks, builds the Docker image, smoke-tests its least-privilege runtime, and scans the result for vulnerabilities and secrets.
-
-## Repository layout
-
-| Path | Purpose |
-|---|---|
-| `container/app.py` | Flask application, configuration, authentication, controller registry, and control-loop integration. |
-| `container/api/` | Serial, log, and application-information API blueprints. |
-| `container/services/` | Unraid disk parsing, history, PWM policy, and serial discovery/transactions. |
-| `frontend/` | Browser application source; Vite builds the production assets. |
-| `fanbridge-link/rp2040/` | Single-channel DIY RP2040-Zero firmware source. |
-| `unraid-templates/` | Unraid version 2 Docker template and installation guide. |
-| `tests/` | Backend policy, migration, authentication, identity, and security regression tests. |
-
-For release history see [RELEASE.md](RELEASE.md). Firmware changes are tracked independently in [fanbridge-link/CHANGELOG.md](fanbridge-link/CHANGELOG.md).
+- [Install FanBridge on Unraid](unraid-templates/README.md)
+- [Build and install the DIY RP2040-Zero controller](fanbridge-link/README.md)
+- [View FanBridge releases](RELEASE.md)
+- [View DIY firmware changes](fanbridge-link/CHANGELOG.md)
+- [Get support](https://forums.unraid.net/topic/193488-fanbridge-docker-support/)
+- [Report a security issue](SECURITY.md)
