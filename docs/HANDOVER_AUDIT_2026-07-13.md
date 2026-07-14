@@ -1,7 +1,9 @@
 # FanBridge engineering handover and repository audit
 
 Date: 2026-07-13
-Review branch: `audit/fanbridge-hardening`
+Merged to `main`: 2026-07-14 in `b7e8c16`
+
+This is the point-in-time engineering handover for the 1.3.0 hardening work. The temporary review branch has been removed after merge. Use the root `README.md`, `RELEASE.md`, and target-specific firmware guide for current operating instructions.
 
 ## Executive assessment
 
@@ -24,7 +26,7 @@ The application should implement this control chain:
 1. Unraid writes current array/device state to `/var/local/emhttp/disks.ini`.
 2. The container receives `/var/local/emhttp` as a read-only directory at `/unraid`; mapping the directory permits Unraid's atomic file replacement to remain visible.
 3. A single dedicated control thread parses and validates `disks.ini`, checks its modification age, classifies disks, and distinguishes active missing temperatures from legitimate spun-down disks.
-4. Each disk is assigned globally, to a specific controller, or explicitly excluded. Unknown/deleted controller assignments fall back to global cooling.
+4. Each disk is assigned to one specific controller or left unassigned. There is no global/all-controllers assignment; deleted or unknown controller assignments are removed rather than silently redirected.
 5. Each controller's demand is based on the hottest assigned HDD/SSD, its applicable curve, and the independent single-drive override.
 6. Missing, malformed, stale, incomplete, or contradictory active-drive telemetry demands 100%. All assigned drives legitimately asleep (or no drives assigned) may use the configured idle fallback.
 7. Automatic transmission is opt-in. The host periodically refreshes a verified setpoint even when it is unchanged.
@@ -43,7 +45,7 @@ This design intentionally layers host fail-safe policy, a firmware command lease
 | High safety | UI/health could report an old successful snapshot as current after the control worker failed | Stalled/dead/error control state invalidates status and readiness with HTTP 503; source age is recalculated rather than frozen |
 | High compatibility | Old one-channel Pico records used `official` or `fanbridge`, but the rebuild reused `official` for the future six-channel product | Pre-schema-2 labels migrate to `diy`; schema-2 `official` remains reserved for the future board |
 | High safety | Controller replacement/reconnect was not identity-checked and any non-empty response could count as PWM success | Reconnect identity is verified, protocol-2 DIY controllers bind by full persistent UID, custom identity is rejected, and PWM requires the exact requested acknowledgement |
-| High safety | Disabling/deleting/reconfiguring a controller or gracefully stopping the container could leave its prior low lease active | A best-effort verified 100% safe-stop runs first/on graceful exit; removal routes assigned drives back to global cooling, while the firmware lease covers crashes/SIGKILL |
+| High safety | Disabling/deleting/reconfiguring a controller or gracefully stopping the container could leave its prior low lease active | A best-effort verified 100% safe-stop runs first/on graceful exit; removal clears that controller's drive assignments, while the firmware lease covers crashes/SIGKILL |
 | High reliability | HTTP requests and health checks performed hardware control, and multiple Gunicorn processes could own the same serial board | One dedicated control thread owns scheduling; HTTP is read-only; production uses one `gthread` Gunicorn process; physical serial locks cover aliases/process overlap |
 | High security | The inherited privileged updater downloaded/mounted/copied UF2 files inside the container and accepted runtime update configuration | The implementation was removed. Compatibility routes return 403, the deployment grants no mount capability or block mappings, and manual checksum-verified flashing is the only supported flow |
 | High security | First-run administrator creation, session persistence, CSRF, login throttling, redirects, and API authentication had weak or inconsistent edges | One-time setup token, atomic private secret/user files, password rules, CSRF, bounded throttling, session-version invalidation, same-origin redirects, POST logout, JSON 401s, and response security headers are enforced |
@@ -131,10 +133,9 @@ Ignored local AppData, databases, logs and tool environments were deliberately n
 
 ## Verification completed
 
-Automated checks on this branch currently include:
+Automated checks at merge include:
 
-- 57 backend safety/security/control tests;
-- 13 frontend API/settings/status tests;
+- 75 Python safety, security, control, migration, and frontend-contract tests;
 - Python compile and correctness lint checks with no undefined names or stale imports;
 - a successful pinned PlatformIO Pico build;
 - Python and npm dependency audits with no reported vulnerabilities;

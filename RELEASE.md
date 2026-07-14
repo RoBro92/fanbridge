@@ -12,6 +12,7 @@ Safety and reliability
 - Added a 100% fail-safe for missing, corrupt, stale, or incomplete active-drive telemetry. Legitimately sleeping or unassigned disks use the configured idle fallback.
 - Refreshes unchanged PWM commands within 30 seconds so the firmware's 60-second control lease remains valid.
 - Added host compatibility and quarantine handling for the independent DIY firmware 2.3 safety protocol; DIY firmware changes are recorded separately in `fanbridge-link/CHANGELOG.md`.
+- Added persistent full-UID controller binding, `DIY-RP2040-xxxx` recognition labels, and bounded pre-enrolment LED identification with DIY firmware source 2.5.0.
 - Migrated legacy `official`/`fanbridge` labels to the existing one-channel DIY product while reserving schema-v2 `official` identity for the future six-channel board.
 - Added a protected hardware-qualification gate to the DIY firmware release workflow and made watchdog failure hold the output at 100%.
 
@@ -34,7 +35,7 @@ Upgrade notes
 
 - Existing single-port installations are migrated to the controller registry. Controller-scoped firmware/status calls now require `cid`.
 - Configure Unraid's disk attribute polling to approximately 300 seconds; FanBridge treats data older than 600 seconds as unsafe by default.
-- Firmware source is now 2.3.0, but no image is advertised in the manifest until a verified `fw-v2.3.0` release and SHA-256 digest are published.
+- Firmware source is now 2.5.0, but no image is advertised in the manifest until a hardware-validated `fw-v2.5.0` release and SHA-256 digest are published.
 
 ## 1.2.3 — 2026-07-12
 - Overhauled light and dark mode aesthetic, updating the dark theme to a high-contrast deep blue/purple and light theme to a soft grey.
