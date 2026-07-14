@@ -1,6 +1,11 @@
 # Python
 __pycache__/
 *.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
 
 # macOS
 .DS_Store
@@ -9,16 +14,29 @@ __pycache__/
 .vscode/
 .venv
 .venv/
+venv*/
+.venv*/
 
 # Local dev only (do not publish)
 dev-appdata/
 container/.env
 container/config.local.yml
 container/secret.key
+container/setup.token
 container/users.local.yml
 docker-compose.override.yml
 .env
 venv/
 .pio-venv/
+.pio/
+*.uf2
+*.elf
+frontend/coverage/
+
+# Local runtime artifacts
+*.log
+*.bak
 
 container/history.db
+container/history.local.db
+container/history.db*
