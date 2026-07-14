@@ -2,17 +2,22 @@ import sqlite3
 import time
 import os
 import threading
-from typing import List, Dict
+from pathlib import Path
+from typing import List, Dict, Optional
 
-_DB_PATH = "/config/history.db"
-if not os.path.exists("/config"):
-    _DB_PATH = "history.db" # local dev fallback
+_DB_PATH = os.environ.get("FANBRIDGE_HISTORY_DB", "").strip()
+if not _DB_PATH:
+    _DB_PATH = "/config/history.db" if os.path.isdir("/config") else str(
+        Path(__file__).resolve().parents[1] / "history.local.db"
+    )
 
 _lock = threading.Lock()
 
 def _get_db():
-    conn = sqlite3.connect(_DB_PATH, check_same_thread=False)
+    Path(_DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(_DB_PATH, check_same_thread=False, timeout=5.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 def init_db():
@@ -27,8 +32,9 @@ def init_db():
                 )
             ''')
             conn.commit()
+        os.chmod(_DB_PATH, 0o600)
 
-def record_status(hdd_avg: int, ssd_avg: int, pwm: int):
+def record_status(hdd_avg: Optional[int], ssd_avg: Optional[int], pwm: int):
     ts = int(time.time())
     with _lock:
         with _get_db() as conn:
@@ -40,6 +46,7 @@ def record_status(hdd_avg: int, ssd_avg: int, pwm: int):
             conn.commit()
 
 def get_history(hours: int = 1) -> List[Dict]:
+    hours = max(1, min(720, int(hours)))
     cutoff = int(time.time()) - (hours * 3600)
     
     if hours <= 1:

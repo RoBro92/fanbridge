@@ -15,6 +15,14 @@ document.addEventListener('DOMContentLoaded', () => {
   initApi();
   const pollInterval = parseInt(document.querySelector('meta[name="poll-interval"]')?.content || '7', 10);
   const version = document.querySelector('meta[name="app-version"]')?.content || 'dev';
+
+  const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#039;',
+  }[character]));
   
   // Create shell with Sidebar layout
   app.innerHTML = `
@@ -26,8 +34,8 @@ document.addEventListener('DOMContentLoaded', () => {
             <h1 style="font-size: 24px; letter-spacing: -0.5px;">FanBridge</h1>
           </div>
         </div>
-        <nav class="sidebar-nav">
-          <div class="nav-section">
+        <nav class="sidebar-nav" aria-label="Controller navigation">
+          <div class="nav-section nav-section-controllers">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
               <div class="nav-label" style="margin-bottom: 0;">Controllers</div>
             </div>
@@ -35,22 +43,22 @@ document.addEventListener('DOMContentLoaded', () => {
               <!-- Controllers rendered dynamically -->
             </div>
           </div>
-          <div class="nav-section">
-            <div class="nav-label">System</div>
-            <a href="#" class="nav-item" id="nav-settings">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-              Settings
-            </a>
-            <a href="#" class="nav-item text-error" style="margin-top: auto; border-top: 1px solid var(--glass-border); padding-top: 16px;">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
-              Logout
-            </a>
-            <div style="text-align: center; margin-top: 16px; padding-bottom: 8px;">
-              <span class="text-muted" style="font-size: 11px; display: block; margin-bottom: 6px;">FanBridge v${version}</span>
-              <span style="background: hsla(200, 50%, 50%, 0.15); color: #7dd3fc; border-radius: 4px; padding: 4px 10px; font-size: 10px; cursor: pointer; display: inline-block; font-weight: 600; letter-spacing: 0.5px; border: 1px solid hsla(200, 50%, 50%, 0.3);" title="Update Available">UPDATE AVAILABLE ↑</span>
-            </div>
-          </div>
         </nav>
+        <div class="sidebar-footer">
+          <div class="nav-label">System</div>
+          <a href="#" class="nav-item" id="nav-settings">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09A1.65 1.65 0 0 0 19.4 15z"></path></svg>
+            Settings
+          </a>
+          <button type="button" class="nav-item nav-button nav-logout" id="nav-logout">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+            <span>Logout</span>
+          </button>
+          <div class="sidebar-version" aria-live="polite">
+            <span class="sidebar-version-current" id="app-version-label">FanBridge v${version}</span>
+            <a class="sidebar-version-update" id="app-update-link" href="#" target="_blank" rel="noopener noreferrer" hidden></a>
+          </div>
+        </div>
       </aside>
       
       <main class="main-content">
@@ -99,8 +107,46 @@ document.addEventListener('DOMContentLoaded', () => {
   // Navigation State
   window.activeControllerId = null;
   const navSettings = document.getElementById('nav-settings');
+  const navLogout = document.getElementById('nav-logout');
+  const appVersionLabel = document.getElementById('app-version-label');
+  const appUpdateLink = document.getElementById('app-update-link');
   const pageTitle = document.getElementById('page-title');
   const sidebarControllersList = document.getElementById('sidebar-controllers-list');
+
+  async function loadVersionStatus() {
+    try {
+      const versionInfo = await api.getAppVersion();
+      const currentVersion = versionInfo?.current || version;
+      appVersionLabel.textContent = `FanBridge v${currentVersion}`;
+
+      const repo = typeof versionInfo?.repo === 'string' ? versionInfo.repo.trim() : '';
+      const validRepo = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo);
+      if (versionInfo?.update_available === true && versionInfo?.latest && validRepo) {
+        appUpdateLink.textContent = `v${versionInfo.latest} available ↗`;
+        appUpdateLink.href = `https://github.com/${repo}/releases/latest`;
+        appUpdateLink.setAttribute('aria-label', `FanBridge version ${versionInfo.latest} is available. Open release notes.`);
+        appUpdateLink.hidden = false;
+      } else {
+        appUpdateLink.hidden = true;
+      }
+    } catch (error) {
+      console.warn('Version check unavailable:', error);
+      appUpdateLink.hidden = true;
+    }
+  }
+
+  navLogout.addEventListener('click', async () => {
+    navLogout.disabled = true;
+    try {
+      await api.logout();
+      window.location.assign('/login');
+    } catch (error) {
+      console.error('Logout failed:', error);
+      navLogout.disabled = false;
+    }
+  });
+
+  loadVersionStatus();
 
   // Initialize Charts
   for(let i=0; i<6; i++) {
@@ -137,10 +183,11 @@ document.addEventListener('DOMContentLoaded', () => {
     let html = '';
     controllers.forEach(c => {
       const isActive = c.id === window.activeControllerId;
+      const safeName = escapeHtml(c.name || c.id);
       html += `
-        <a href="#" class="nav-item ${isActive ? 'active' : ''} controller-nav-item" data-id="${c.id}" data-name="${c.name}">
+        <a href="#" class="nav-item ${isActive ? 'active' : ''} controller-nav-item" data-id="${c.id}" data-name="${safeName}" title="${safeName}">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
-          <span>${c.name}</span>
+          <span>${safeName}</span>
         </a>
       `;
     });
@@ -215,12 +262,14 @@ document.addEventListener('DOMContentLoaded', () => {
       const data = await api.getStatus();
       renderSidebar(data.controllers);
       updateDashboardData(data, window.activeControllerId);
+      const activeController = (data.controllers || []).find(c => c.id === window.activeControllerId);
       
       const serialPip = document.getElementById('pip-serial-status');
       if (serialPip) {
-        serialPip.innerText = 'Connected';
-        serialPip.parentElement.classList.remove('pip-error');
-        serialPip.parentElement.classList.add('pip-success');
+        const connected = activeController?.serial?.connected;
+        serialPip.innerText = connected === true ? 'Connected' : connected === false ? 'Disconnected' : 'Unknown';
+        serialPip.parentElement.classList.remove('pip-success', 'pip-error', 'pip-warning');
+        serialPip.parentElement.classList.add(connected === true ? 'pip-success' : connected === false ? 'pip-error' : 'pip-warning');
         serialPip.parentElement.style.color = '';
       }
       
@@ -232,20 +281,34 @@ document.addEventListener('DOMContentLoaded', () => {
         lastUpdatePip.parentElement.classList.add('pip-success');
       }
 
-      // Placeholder logic for new pips until backend is connected
       const thermalPip = document.getElementById('pip-thermal-status');
       if (thermalPip) {
-        thermalPip.innerText = 'OK';
-        thermalPip.parentElement.classList.remove('pip-error', 'pip-warning');
-        thermalPip.parentElement.classList.add('pip-success');
+        const safety = activeController?.safety_state;
+        thermalPip.innerText = safety === 'failsafe' ? 'FAIL-SAFE' : activeController?.override ? 'OVERRIDE' : safety === 'idle' ? 'IDLE' : 'OK';
+        thermalPip.parentElement.classList.remove('pip-success', 'pip-error', 'pip-warning');
+        thermalPip.parentElement.classList.add(safety === 'failsafe' ? 'pip-error' : activeController?.override ? 'pip-warning' : 'pip-success');
+      }
+
+      const powerPip = document.getElementById('pip-12v-status');
+      if (powerPip) {
+        const voltage = Number(activeController?.telemetry?.bus_v);
+        const hasVoltage = Number.isFinite(voltage) && voltage > 0;
+        powerPip.innerText = hasVoltage ? 'OK' : 'Unknown';
+        powerPip.parentElement.classList.remove('pip-success', 'pip-error', 'pip-warning');
+        powerPip.parentElement.classList.add(hasVoltage ? 'pip-success' : 'pip-warning');
       }
 
       const healthPip = document.getElementById('pip-health-status');
       if (healthPip) {
-        healthPip.innerText = 'OK';
-        healthPip.parentElement.classList.remove('pip-error');
-        healthPip.parentElement.classList.add('pip-success');
+        const fans = Array.isArray(activeController?.telemetry?.fans) ? activeController.telemetry.fans : [];
+        const stalled = fans.some(fan => Number(fan?.pwm_percent) > 0 && Number(fan?.rpm) === 0);
+        healthPip.innerText = stalled ? 'STALLED' : fans.length ? 'OK' : 'Unknown';
+        healthPip.parentElement.classList.remove('pip-success', 'pip-error', 'pip-warning');
+        healthPip.parentElement.classList.add(stalled ? 'pip-error' : fans.length ? 'pip-success' : 'pip-warning');
       }
+
+      const modePip = document.getElementById('pip-mode-status');
+      if (modePip) modePip.innerText = data.auto_apply === true ? 'AUTO' : 'MANUAL';
     } catch (e) {
       console.error('Polling error:', e);
       const serialPip = document.getElementById('pip-serial-status');

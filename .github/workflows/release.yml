@@ -1,14 +1,15 @@
-name: Create GitHub Release
+name: Repair GitHub release
 
 on:
-  push:
-    tags: [ 'v*' ]
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to create/update release for (e.g., v1.1.3)'
+        description: 'Existing release tag (for example, v1.2.3)'
         required: true
-        default: ''
+        type: string
+
+permissions:
+  contents: read
 
 jobs:
   release:
@@ -16,43 +17,57 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Determine ref and version
-        id: ref
+      - name: Validate tag and derive version
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          REF_NAME="${GITHUB_REF_NAME}"
-          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag }}" ]; then
-            REF_NAME="${{ inputs.tag }}"
+          set -euo pipefail
+          ref_name="$EVENT_REF_NAME"
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            ref_name="$INPUT_TAG"
           fi
-          echo "REF_NAME=${REF_NAME}" >> $GITHUB_ENV
-          echo "VER_NO_V=${REF_NAME#v}" >> $GITHUB_ENV
+          if [[ ! "$ref_name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid application release tag: $ref_name" >&2
+            exit 1
+          fi
+          {
+            printf 'REF_NAME=%s\n' "$ref_name"
+            printf 'VER_NO_V=%s\n' "${ref_name#v}"
+          } >> "$GITHUB_ENV"
 
-      - name: Checkout repo at tag
-        uses: actions/checkout@v4
+      - name: Check out the release tag
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
-          ref: refs/tags/${{ env.REF_NAME }}
+          ref: ${{ env.REF_NAME }}
 
-      - name: Extract release notes from RELEASE.md
+      - name: Extract release notes
         id: notes
         shell: bash
+        env:
+          RELEASE_TAG: ${{ env.REF_NAME }}
+          VERSION: ${{ env.VER_NO_V }}
         run: |
-          awk -v ver="${{ env.VER_NO_V }}" '
+          set -euo pipefail
+          awk -v ver="$VERSION" '
             $0 ~ "^##[[:space:]]*" ver "( |$)" {flag=1; next}
             flag && /^##[[:space:]]*[0-9]/ {flag=0}
             flag {print}
-          ' RELEASE.md > RELEASE_SECTION.md || true
-          if [ ! -s RELEASE_SECTION.md ]; then
-            echo "Could not find notes for version ${{ env.VER_NO_V }} in RELEASE.md; using fallback body." >&2
-            echo "Release ${{ env.REF_NAME }}" > RELEASE_SECTION.md
+          ' RELEASE.md > RELEASE_SECTION.md
+          if [[ ! -s RELEASE_SECTION.md ]]; then
+            echo "Could not find notes for $VERSION in RELEASE.md; using fallback body." >&2
+            printf 'Release %s\n' "$RELEASE_TAG" > RELEASE_SECTION.md
           fi
-          echo "BODY_FILE=RELEASE_SECTION.md" >> $GITHUB_OUTPUT
+          printf 'BODY_FILE=RELEASE_SECTION.md\n' >> "$GITHUB_OUTPUT"
 
-      - name: Create/Update GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Create or update GitHub release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ env.REF_NAME }}
           name: ${{ env.REF_NAME }}
           body_path: ${{ steps.notes.outputs.BODY_FILE }}
           draft: false
           prerelease: false
-

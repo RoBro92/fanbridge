@@ -82,7 +82,12 @@ def api_logs():
 @bp.post("/log_level")
 def api_log_level():
     data = request.get_json(force=True, silent=True) or {}
-    level = (data.get("level") or "").upper()
+    if not isinstance(data, dict):
+        return jsonify({"ok": False, "error": "JSON object required"}), 400
+    raw_level = data.get("level")
+    if not isinstance(raw_level, str):
+        return jsonify({"ok": False, "error": "level must be a string"}), 400
+    level = raw_level.upper()
     import logging
     if level not in _LEVELS:
         return jsonify({"ok": False, "error": "invalid level"}), 400
@@ -140,25 +145,29 @@ def api_logs_download():
             }
         except Exception:
             pass
+        safe_env = {
+            "FANBRIDGE_LOG_LEVEL",
+            "FANBRIDGE_SECURE_COOKIES",
+            "FANBRIDGE_DISKS_STALE_WARN_SEC",
+            "FANBRIDGE_CONTROL_LOOP",
+        }
         try:
-            info["env"] = {k: v for (k, v) in os.environ.items() if k.upper().startswith("FANBRIDGE_")}
+            info["env"] = {key: os.environ[key] for key in sorted(safe_env) if key in os.environ}
         except Exception:
-            pass
-        try:
-            info["serial_status"] = serial_svc.get_serial_status(full=True)
-            vres = serial_svc.serial_send_line("version", expect_reply=True)
-            info["controller_version_reply"] = vres.get("reply")
-        except Exception:
-            pass
-        try:
-            mounts: list[str] = []
-            with open("/proc/mounts", "r", encoding="utf-8", errors="ignore") as f:
-                for ln in f.readlines()[:500]:
-                    if any(tag in ln for tag in ("/config", "/unraid", "/proc", "/sys", "/")):
-                        mounts.append(ln.strip())
-            info["mounts"] = mounts
-        except Exception:
-            info["mounts"] = []
+            info["env"] = {}
+        cid = (request.args.get("cid") or "").strip()
+        if cid:
+            try:
+                info["serial_status"] = serial_svc.get_serial_status(cid, full=True)
+                # A quarantined 2.1/2.2 DIY board must receive no further
+                # diagnostics: those releases incorrectly renewed their unsafe
+                # lease for every command. Only query a positively verified
+                # controller.
+                if info["serial_status"].get("connected"):
+                    vres = serial_svc.serial_send_line(cid, "VERSION", expect_reply=True)
+                    info["controller_version_reply"] = vres.get("reply")
+            except Exception:
+                info["serial_status"] = {"connected": False, "message": "diagnostic query failed"}
         return info
 
     diagnostics = _collect_diagnostics()
@@ -205,14 +214,6 @@ def api_logs_download():
             cv = diagnostics.get('controller_version_reply')
             if cv:
                 lines.append(f"  controller version: {cv}")
-        except Exception:
-            pass
-        try:
-            m = diagnostics.get('mounts') or []
-            if m:
-                lines.append("Mounts:")
-                for ln in m[:50]:
-                    lines.append(f"  {ln}")
         except Exception:
             pass
         lines.append("==== End Diagnostics ====")

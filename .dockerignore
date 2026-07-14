@@ -1,10 +1,53 @@
-# Exclude files not needed in the Docker build context
+# Version-control and local tooling state
 .git
+.github
 .venv
 dev-appdata
+dev-unraid
+venv_test
+**/.DS_Store
 **/__pycache__
-**/*.pyc
-.DS_Store
+**/*.py[cod]
+**/node_modules
 
-# Do not include local-dev .env inside the image
-container/.env
+# Local credentials, runtime state, backups, and logs must never enter a build
+# context.  The Dockerfile also uses an explicit runtime COPY allowlist.
+**/.env
+**/.env.*
+**/*secret*
+**/setup.token
+**/users*.yml
+**/config.local.y*ml
+**/*.db
+**/*.db-*
+**/*.db.*
+**/*.bak
+**/*.log
+
+# The UI is rebuilt from frontend/package-lock.json in the build stage.
+container/static/dist
+container/templates/index.html
+frontend/src/**/*.test.js
+frontend/vitest.config.js
+
+# Development, test, documentation, and hardware-design inputs are not used by
+# either image stage.  Keep remote-builder contexts small and unsurprising.
+tests
+hardware
+README.md
+SECURITY.md
+docker-compose.yml
+requirements-dev.txt
+dev_unraid_generator.py
+old_index.html
+patch_ui.py
+container/config.local.yml.example
+container/.env.example
+container/static/empty-state.jpg
+container/static/kofi.png
+container/static/safari-pinned-tab.svg
+
+# Not used by the application image.
+Images
+fanbridge-link
+unraid-templates

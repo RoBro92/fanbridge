@@ -1,6 +1,40 @@
-Version: 1.2.3
+Version: 1.3.0
 
 # Changelog
+
+## 1.3.0 — 2026-07-13
+
+Safety and reliability
+
+- Moved temperature polling and PWM delivery into one dedicated control loop; HTTP health and status requests are now read-only.
+- Reduced Gunicorn to one hardware-owning process and serialized transactions per physical serial controller.
+- Changed the control policy to use the hottest assigned disk, with per-controller drive assignments.
+- Added a 100% fail-safe for missing, corrupt, stale, or incomplete active-drive telemetry. Legitimately sleeping or unassigned disks use the configured idle fallback.
+- Refreshes unchanged PWM commands within 30 seconds so the firmware's 60-second control lease remains valid.
+- Added host compatibility and quarantine handling for the independent DIY firmware 2.3 safety protocol; DIY firmware changes are recorded separately in `fanbridge-link/CHANGELOG.md`.
+- Migrated legacy `official`/`fanbridge` labels to the existing one-channel DIY product while reserving schema-v2 `official` identity for the future six-channel board.
+- Added a protected hardware-qualification gate to the DIY firmware release workflow and made watchdog failure hold the output at 100%.
+
+Security and deployment
+
+- Added atomic `0600` configuration, user, setup-token, and session-secret storage without destructive default rewrites.
+- Added a one-time first-run setup token, password length enforcement, login throttling, same-origin redirect validation, session invalidation, JSON API authentication failures, and POST-only logout.
+- Removed the legacy privileged in-app firmware updater and retained explicit disabled compatibility responses; updates remain a checksum-verified host operation until product-bound verification exists.
+- Rebuilt the Docker image from an explicit file allowlist and a clean frontend build so local secrets, databases, logs, and stale bundles cannot be copied into releases.
+- Updated Flask/Gunicorn dependencies, hardened CI, and converted the Unraid template to schema v2 with portable appdata and least-privilege device mappings.
+
+Frontend and repository
+
+- Replaced fabricated health, fan, power, log, update, and history values with real API data or explicit `Unknown`/`Unavailable` states.
+- Reconnected settings, curves, assignments, password change, logs, history range, logout, and controller-scoped APIs; unsupported controls are disabled or removed.
+- Fixed responsive layout, escaped telemetry interpolation, stored-DOM-XSS paths, session-expiry handling, and the missing login assets.
+- Added backend control/security tests and frontend contract tests; removed tracked virtual environments and obsolete demo artifacts.
+
+Upgrade notes
+
+- Existing single-port installations are migrated to the controller registry. Controller-scoped firmware/status calls now require `cid`.
+- Configure Unraid's disk attribute polling to approximately 300 seconds; FanBridge treats data older than 600 seconds as unsafe by default.
+- Firmware source is now 2.3.0, but no image is advertised in the manifest until a verified `fw-v2.3.0` release and SHA-256 digest are published.
 
 ## 1.2.3 — 2026-07-12
 - Overhauled light and dark mode aesthetic, updating the dark theme to a high-contrast deep blue/purple and light theme to a soft grey.
