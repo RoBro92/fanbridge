@@ -2,7 +2,7 @@ Version: 1.3.0
 
 # Changelog
 
-## 1.3.0 — 2026-07-13
+## 1.3.0 — 2026-07-14
 
 Safety and reliability
 
@@ -30,6 +30,7 @@ Frontend and repository
 - Reconnected settings, curves, assignments, password change, logs, history range, logout, and controller-scoped APIs; unsupported controls are disabled or removed.
 - Fixed responsive layout, escaped telemetry interpolation, stored-DOM-XSS paths, session-expiry handling, and the missing login assets.
 - Added backend control/security tests and frontend contract tests; removed tracked virtual environments and obsolete demo artifacts.
+- Removed the duplicate dashboard poll-rate control; the browser refresh interval remains in Controller Settings. Official-controller status indicators are centred, while the smaller DIY set remains left-aligned.
 
 Upgrade notes
 

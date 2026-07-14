@@ -156,6 +156,22 @@
   margin-top: 24px;
 }
 
+.controller-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.controller-status-row--diy {
+  justify-content: flex-start;
+}
+
+.controller-status-row--official {
+  justify-content: center;
+}
+
 .controller-tool-slot {
   display: flex;
   min-width: 0;
