@@ -25,6 +25,10 @@ Check that the downloaded file begins with the XML declaration and `<Container v
 
 Use the controller's stable `/dev/serial/by-id/...` host path, not a changing `/dev/ttyACM*` host number. For each additional controller, add a **Device** mapping with a different host by-id path and a distinct container target such as `/dev/ttyACM1`; select that container path in FanBridge. Do not enable privileged mode or map all of `/dev`.
 
+After the container starts, use **Add Controller → Scan** to refresh the exposed serial-device list. Protocol-2 DIY firmware supplies a persistent full UID and an optional LED-identify action, allowing FanBridge to match the physical board to its saved server-side settings. The display suffix in `DIY-RP2040-xxxx` is only a recognition aid; the complete UID is the binding key.
+
+Docker Device mappings are fixed when the container is created. FanBridge can rebind a known UID only when the replacement path is visible inside the container. If a board is moved and its stable by-id mapping no longer resolves, correct the Unraid Device entry and restart the container.
+
 Map the entire `/var/local/emhttp` directory read-only. Do not add a second, overlapping bind for `disks.ini`, because a single-file bind can retain a stale inode when Unraid replaces the file.
 
 ## Temperature update cadence
