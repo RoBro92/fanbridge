@@ -59,12 +59,14 @@ See the [controller firmware and wiring guide](fanbridge-link/README.md) and the
 FanBridge is not currently available in the public Community Applications feed while its listing is migrated. Install the version 2 template manually from an Unraid terminal:
 
 ```bash
+mkdir -p /boot/config/plugins/dockerMan/templates-user
 curl --fail --location --proto '=https' --tlsv1.2 \
   --output /boot/config/plugins/dockerMan/templates-user/my-fanbridge.xml \
   https://raw.githubusercontent.com/RoBroLabs/fanbridge/main/unraid-templates/templates/my-fanbridge.xml
+head -n 2 /boot/config/plugins/dockerMan/templates-user/my-fanbridge.xml
 ```
 
-Confirm the file starts with the XML declaration and `<Container version="2">`, then open **Docker → Add Container** and select **FanBridge**.
+Confirm the output starts with the XML declaration and `<Container version="2">`, then open **Docker → Add Container**, select **FanBridge** from the template list, and leave **Privileged** off. The template pulls the stable `ghcr.io/robrolabs/fanbridge:latest` image; its settings match the Community Applications submission.
 
 ### Required mappings
 
@@ -75,6 +77,8 @@ Confirm the file starts with the XML declaration and `<Container version="2">`, 
 | **Controller 1** | `/dev/serial/by-id/<controller-id>` | `/dev/ttyACM0` | Device |
 | **Controller 2** | A different `/dev/serial/by-id/<controller-id>` | `/dev/ttyACM1` | Device |
 
+The template also sets the Web UI to host port `8080`, `FANBRIDGE_DISKS_STALE_WARN_SEC=600`, and `FANBRIDGE_SECURE_COOKIES=0`. Change the host port if `8080` is already occupied. Set secure cookies to `1` only when the Web UI is served through HTTPS.
+
 Add further controllers with distinct container paths such as `/dev/ttyACM2`. Do not enable privileged mode, expose all of `/dev`, or create a second overlapping bind for `/unraid/disks.ini`.
 
 Map the entire `/var/local/emhttp` directory because Unraid may replace `disks.ini` atomically. A bind to only the old file inode can silently stop receiving updates.
@@ -84,10 +88,11 @@ Full template instructions are in [unraid-templates/README.md](unraid-templates/
 ## First run
 
 1. Start the container and open `http://<unraid-host>:8080/`.
-2. If `FANBRIDGE_SETUP_TOKEN` was not preset, retrieve the generated token from the container log or `/config/setup.token`:
+2. If `FANBRIDGE_SETUP_TOKEN` was not preset, retrieve the generated token from the container log or the mapped AppData directory:
 
    ```bash
    docker logs FanBridge
+   cat /mnt/user/appdata/fanbridge/setup.token
    ```
 
 3. Create the first administrator with the setup token and a password of at least 12 characters.

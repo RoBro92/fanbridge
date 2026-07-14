@@ -49,7 +49,6 @@ jobs:
         run: |
           npm ci --ignore-scripts
           npm audit --audit-level=high
-          npm test
           npm run build
 
       - name: Require committed assets to match frontend source

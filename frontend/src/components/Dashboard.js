@@ -29,7 +29,7 @@ export function initDashboardContainer(container) {
     <!-- TAB 1: Drives & Telemetry -->
     <div id="tab-drives-content" style="display: none;">
       <!-- Global Dashboard Status Pips -->
-      <div style="display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
+      <div class="controller-status-row controller-status-row--official" id="controller-status-row">
         <div class="status-pip pip-success" id="pip-container-serial">
           <span class="pip-dot"></span>
           <span class="pip-label">Serial</span>
@@ -59,17 +59,6 @@ export function initDashboardContainer(container) {
           <span class="pip-dot"></span>
           <span class="pip-label">Updated</span>
           <span class="pip-value" id="pip-last-updated">--:--:--</span>
-        </div>
-        <div class="status-pip">
-          <span class="pip-label">Poll Rate</span>
-          <select id="pip-refresh-rate" style="background: transparent; border: none; color: var(--color-text-primary); font-size: 11px; font-weight: 600; cursor: pointer; padding: 0; margin-left: -4px;">
-            <option value="3">3s</option>
-            <option value="5">5s</option>
-            <option value="7" selected>7s</option>
-            <option value="10">10s</option>
-            <option value="15">15s</option>
-            <option value="30">30s</option>
-          </select>
         </div>
       </div>
 
@@ -344,16 +333,6 @@ export function initDashboardContainer(container) {
     }
   });
 
-  // Bind Poll Rate pip
-  document.getElementById('pip-refresh-rate').addEventListener('change', (e) => {
-    if (window.updatePollInterval) {
-      window.updatePollInterval(parseInt(e.target.value, 10));
-    }
-    // Also sync the standard setting input if it exists
-    const standardInput = document.getElementById('poll-interval');
-    if (standardInput) standardInput.value = e.target.value;
-  });
-
   // Bind PWM Override Toggle
   const btnCurveGlobal = document.getElementById('btn-curve-global');
   const btnCurveCustom = document.getElementById('btn-curve-custom');
@@ -612,6 +591,7 @@ export function updateDashboardData(data, activeControllerId) {
 
   // Hide or show elements based on controller type
   const isDIY = controller.type === 'diy';
+  const statusRow = document.getElementById('controller-status-row');
   const pip12v = document.getElementById('pip-container-12v');
   const pipThermal = document.getElementById('pip-container-thermal');
   const pipHealth = document.getElementById('pip-container-health');
@@ -619,6 +599,11 @@ export function updateDashboardData(data, activeControllerId) {
   const configOverview = document.getElementById('controller-config-overview');
   const hardwareTelemetry = document.getElementById('hardware-telemetry-card');
   const fanConfigSection = document.getElementById('fan-config-section');
+
+  if (statusRow) {
+    statusRow.classList.toggle('controller-status-row--diy', isDIY);
+    statusRow.classList.toggle('controller-status-row--official', !isDIY);
+  }
   
   if (pip12v) pip12v.style.display = isDIY ? 'none' : 'flex';
   if (pipThermal) pipThermal.style.display = isDIY ? 'none' : 'flex';
