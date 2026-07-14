@@ -30,15 +30,15 @@ export function initLogs(container) {
 
 export function initLinkUpdates(container) {
   container.innerHTML = `
-    <div class="glass-card" style="margin-top: 24px;">
+    <div class="glass-card" style="width: 100%; height: 100%; display: flex; flex-direction: column;">
       <h3 style="margin:0 0 16px; display:flex; justify-content: space-between; align-items:center;">
         <span>Link Updates & Firmware</span>
       </h3>
       
-      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+      <div style="display: flex; flex-direction: column; gap: 20px; flex: 1;">
         <div>
           <h4 style="margin: 0 0 8px; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: 1px; font-size: 11px;">Device Information</h4>
-          <div style="font-size: 12px; display: flex; flex-direction: column; gap: 6px; color: var(--color-text-muted);">
+          <div style="font-size: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; color: var(--color-text-muted);">
             <div>Port: <span id="rpPort" style="color: var(--color-text-primary);">/dev/ttyACM0</span></div>
             <div>USB: <span id="rpUsb" style="color: var(--color-text-primary);">1-1.3</span></div>
             <div>Manufacturer: <span id="rpMan" style="color: var(--color-text-primary);">Raspberry Pi</span></div>

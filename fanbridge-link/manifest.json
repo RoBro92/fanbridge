@@ -1,18 +1,5 @@
 {
-  "items": [
-    {
-      "board": "rp2040",
-      "version": "2.2.0",
-      "url": "https://github.com/RoBroLabs/fanbridge/releases/download/fw-v2.2.0/fanbridge-rp2040-2.2.0.uf2",
-      "notes": "USB firmware update support via FanBridge UI",
-      "flash_method": "rp2040_uf2"
-    },
-    {
-      "board": "rp2040",
-      "version": "1.0.0",
-      "url": "https://github.com/RoBroLabs/fanbridge/releases/download/v1.0.0/fanbridge-rp2040-1.0.0.uf2",
-      "notes": "Built from fanbridge-link/rp2040/FanBridge_Link via CI",
-      "flash_method": "rp2040_uf2"
-    }
-  ]
+  "schema_version": 2,
+  "items": [],
+  "notice": "No firmware is currently approved for in-app installation. Publish the hardware-validated 2.5.0 safety, persistent-identity, and LED-identify firmware with its SHA-256 digest before adding a release entry. Use the verified manual update procedure in fanbridge-link/README.md."
 }

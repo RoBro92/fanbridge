@@ -1,3 +1,4 @@
+import re
 from typing import Tuple, Optional
 from .http import http_get_json
 
@@ -11,6 +12,8 @@ def parse_semver_tuple(v: str) -> Tuple:
         return (0, 0, 0)
 
 def latest_github_release(repo: str, timeout: float = 6.0) -> Optional[str]:
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}", str(repo or "")):
+        return None
     url = f"https://api.github.com/repos/{repo}/releases/latest"
     data = http_get_json(url, timeout=timeout)
     if isinstance(data, dict):
@@ -18,4 +21,3 @@ def latest_github_release(repo: str, timeout: float = 6.0) -> Optional[str]:
         if isinstance(tag, str) and tag.strip():
             return tag.strip()
     return None
-

@@ -1,11 +1,13 @@
 from flask import Flask, jsonify, request, render_template, session, redirect, url_for, make_response, g
-import os, time, yaml, glob, pathlib, logging, sys, datetime, secrets
+import atexit, os, time, yaml, glob, pathlib, logging, sys, datetime, secrets
+import copy, re, tempfile, threading
 from typing import Protocol, runtime_checkable
 from services import serial as serial_svc
 from api.serial import bp as serial_bp
 from api.appinfo import bp as appinfo_bp
 from api.logs import bp as logs_bp
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.exceptions import HTTPException
 
 try:
     from dotenv import load_dotenv  
@@ -27,6 +29,9 @@ class SerialProto(Protocol):
 
 def _secret_path() -> pathlib.Path:
     # persist a stable session secret across restarts
+    configured = os.environ.get("FANBRIDGE_SECRET_PATH", "").strip()
+    if configured:
+        return pathlib.Path(configured)
     return (_BASE / "secret.key") if not _in_docker() else pathlib.Path("/config/secret.key")
     # Ensure gunicorn workers share a stable secret key.
     # - If the file exists: read it
@@ -39,13 +44,15 @@ def _load_or_create_secret() -> str:
         if p.exists():
             key = p.read_text(encoding="utf-8").strip()
             if key:
+                os.chmod(p, 0o600)
                 return key
 
         # create if missing/empty
         p.parent.mkdir(parents=True, exist_ok=True)
-        key = secrets.token_urlsafe(32)
+        key = secrets.token_urlsafe(48)
         try:
-            with open(p, "x", encoding="utf-8") as f:
+            fd = os.open(str(p), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(key)
                 f.flush()
                 os.fsync(f.fileno())
@@ -56,16 +63,57 @@ def _load_or_create_secret() -> str:
                 if k2:
                     return k2
                 time.sleep(0.05)
+        os.chmod(p, 0o600)
         return key
-    except Exception:
-        # absolute last resort (won't persist across workers)
-        return secrets.token_urlsafe(32)
+    except Exception as exc:
+        # An ephemeral key logs every user out after a restart and used to
+        # differ between Gunicorn workers.  A container must fail clearly if
+        # its persistent secret cannot be created.
+        if _in_docker():
+            raise RuntimeError(f"cannot persist session secret at {p}: {exc}") from exc
+        return secrets.token_urlsafe(48)
 
 def _in_docker() -> bool:
     try:
         return os.path.exists("/.dockerenv")
     except Exception:
         return False
+
+
+def _setup_token_path() -> pathlib.Path:
+    configured = os.environ.get("FANBRIDGE_SETUP_TOKEN_PATH", "").strip()
+    if configured:
+        return pathlib.Path(configured)
+    return (_BASE / "setup.token") if not _in_docker() else pathlib.Path("/config/setup.token")
+
+
+def _load_or_create_setup_token() -> str:
+    """Return the one-time first-run token without exposing it over HTTP."""
+    configured = os.environ.get("FANBRIDGE_SETUP_TOKEN", "").strip()
+    if configured:
+        return configured
+    path = _setup_token_path()
+    if path.exists():
+        token = path.read_text(encoding="utf-8").strip()
+        if token:
+            os.chmod(path, 0o600)
+            return token
+    path.parent.mkdir(parents=True, exist_ok=True)
+    token = secrets.token_urlsafe(24)
+    try:
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(token)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except FileExistsError:
+        token = path.read_text(encoding="utf-8").strip()
+    os.chmod(path, 0o600)
+    # Write only to the container console. The application ring buffer is
+    # downloadable as a support bundle and must never retain this credential.
+    sys.stderr.write(f"FanBridge first-run setup token: {token}\n")
+    sys.stderr.flush()
+    return token
 
 # Local-only default serial port for macOS RP2040 testing
 def _local_default_serial_port() -> str:
@@ -98,9 +146,6 @@ if load_dotenv:
 from core.logging_setup import (
     setup_logging as _setup_logging,
     ensure_handlers as _ensure_log_handlers,
-    RingBufferHandler,
-    LOG_RING as _LOG_RING,
-    LOG_LOCK as _LOG_LOCK,
 )
 
 _setup_logging()
@@ -133,7 +178,9 @@ def _warn_once(key: str, message: str) -> None:
 
 def _client_info() -> dict:
     try:
-        ip = request.headers.get("X-Forwarded-For", request.remote_addr or "")
+        # Do not trust X-Forwarded-For unless ProxyFix has been explicitly
+        # configured for a known reverse proxy.
+        ip = request.remote_addr or ""
         ua = request.headers.get("User-Agent", "")
         return {"ip": ip, "ua": ua}
     except Exception:
@@ -148,7 +195,6 @@ def _audit(event: str, **data) -> None:
         pass
 
 # --------- Minimal Prometheus metrics ---------
-import core.metrics as _metrics
 from core.metrics import (
     m_inc_http as _m_inc_http,
     m_inc_serial_cmd as _m_inc_serial_cmd,
@@ -208,6 +254,7 @@ app.config.update(
     SESSION_COOKIE_SECURE=bool(_SECURE_COOKIES),  # enable in prod behind TLS via env
     SESSION_COOKIE_HTTPONLY=True,
     PERMANENT_SESSION_LIFETIME=datetime.timedelta(days=30),
+    MAX_CONTENT_LENGTH=4 * 1024 * 1024,
 )
 if os.environ.get("TEMPLATES_AUTO_RELOAD") == "1" or os.environ.get("FLASK_DEBUG"):
     try:
@@ -242,7 +289,9 @@ def _default_config_path() -> str:
 CONFIG_PATH = os.environ.get("FANBRIDGE_CONFIG") or _default_config_path()
 DISKS_INI = os.environ.get("FANBRIDGE_DISKS_INI", "/unraid/disks.ini")
 
-USERS_PATH = "/config/users.yml" if _in_docker() else str((_BASE / "users.local.yml"))
+USERS_PATH = os.environ.get("FANBRIDGE_USERS") or (
+    "/config/users.yml" if _in_docker() else str((_BASE / "users.local.yml"))
+)
 
 # Serial preference and baud configurable via environment
 # - In Docker: assume RP2040 default at /dev/ttyACM0 (non-fatal if absent)
@@ -276,11 +325,10 @@ except Exception:
 
 # App factory for WSGI servers
 def create_app():
-    # Register blueprints
-    try:
+    # Registration is idempotent for test imports, but startup failures are
+    # never swallowed: a half-built hardware service must not look healthy.
+    if serial_bp.name not in app.blueprints:
         app.register_blueprint(serial_bp, url_prefix="/api/serial")
-    except Exception:
-        pass
     # Provide app-wide context for blueprints (read-only values/functions)
     app.config['FB_APP_INFO'] = {
         'CONFIG_PATH': CONFIG_PATH,
@@ -290,42 +338,32 @@ def create_app():
         'APP_VERSION': APP_VERSION,
         'IN_DOCKER_FUNC': _in_docker,
     }
-    try:
+    if appinfo_bp.name not in app.blueprints:
         app.register_blueprint(appinfo_bp, url_prefix="/api")
-    except Exception:
-        pass
-    try:
+    if logs_bp.name not in app.blueprints:
         app.register_blueprint(logs_bp, url_prefix="/api")
-    except Exception:
-        pass
-    try:
-        # Final safeguard: ensure our ring handler is present once the app is built
-        _ensure_log_handlers()
-    except Exception:
-        pass
+    # Final safeguard: ensure our ring handler is present once the app is built
+    _ensure_log_handlers()
     return app
 
 # Ensure blueprints are registered when imported under WSGI servers (gunicorn)
 # which typically load `app:app`. `create_app()` wires up API blueprints onto
 # the global `app` object; call it here so routes like /api/logs are present.
-try:
-    app = create_app()
-except Exception:
-    pass
+app = create_app()
 
 # Initialize serial service context
-try:
-    serial_svc.init(
-        logger=log,
-        dbg_should=_dbg_should,
-        inc_open_fail=_m_inc_serial_open_fail,
-    )
-except Exception:
-    pass
+serial_svc.init(
+    logger=log,
+    dbg_should=_dbg_should,
+    inc_open_fail=_m_inc_serial_open_fail,
+    inc_serial_cmd=_m_inc_serial_cmd,
+)
 
 DEFAULT_CONFIG = {
+    "schema_version": 3,
     "controllers": [],
     "poll_interval_seconds": 7,     # UI refresh; clamped 3–60s
+    "control_interval_seconds": 10,
     "hdd_thresholds": [30,32,35,38,40,42,44,45],
     "hdd_pwm":        [0,20,30,40,50,60,80,100],
     "ssd_thresholds": [35,40,45,48,50,52,54,55],
@@ -334,54 +372,127 @@ DEFAULT_CONFIG = {
     "single_override_ssd_c": 60,
     "override_pwm": 100,
     "fallback_pwm": 10,
+    "failsafe_pwm": 100,
     "pwm_hysteresis": 3,
     "exclude_devices": [],
+    "drive_assignments": {},
     "idle_cutoff_hdd_c": 30,  
     "idle_cutoff_ssd_c": 35,  
-    "sim": { "drives": [] },
     # Auto-apply PWM to microcontroller (local/dev or container) — disabled by default
     "auto_apply": False,
-    "auto_apply_min_interval_s": 3,          # minimum seconds between sends
-    "auto_apply_hysteresis_duty": 5,         # minimum change in 0..255 units
-    # RP firmware update settings
-    "rp": {
-        # URL hosting a manifest.json and UF2 files; adjustable in UI
-        # Example expected: <base>/manifest.json -> { items: [{ board, version, url }] }
-        "repo_url": "https://raw.githubusercontent.com/RoBroLabs/fanbridge/main/fanbridge-link",
-        # Optional: override board name; default 'rp2040'
-        "board": "rp2040",
-        # Optional: preferred RP2 block device path (e.g., /dev/disk/by-id/...-part1 or /dev/sdX1)
-        # When set and present, flashing will use this path first.
-        "rp2_device": "",
-    },
+    "auto_apply_min_interval_seconds": 3,
+    "auto_apply_refresh_interval_seconds": 20,
+    "auto_apply_hysteresis_percent": 2,
 }
 
-# Threshold for considering /unraid/disks.ini stale (seconds). Defaults to Unraid's
-# poll_attributes default (30 minutes). Can be tuned via env.
+# A fan controller should not trust a temperature snapshot for Unraid's
+# historically long SMART polling interval. Operators should configure a
+# roughly five-minute poll; ten minutes is the fail-safe ceiling here.
 try:
-    DISKS_STALE_WARN_SEC = int(os.environ.get("FANBRIDGE_DISKS_STALE_WARN_SEC", "1800") or "1800")
+    DISKS_STALE_WARN_SEC = int(os.environ.get("FANBRIDGE_DISKS_STALE_WARN_SEC", "600") or "600")
 except Exception:
-    DISKS_STALE_WARN_SEC = 1800
+    DISKS_STALE_WARN_SEC = 600
 
-from services.disks import is_bind_mounted_file as _is_bind_mounted_file
+_CONFIG_LOCK = threading.RLock()
+_USERS_LOCK = threading.RLock()
+_RATE_LOCK = threading.Lock()
+_MUTATION_LOCK = threading.RLock()
+_LAST_GOOD_CONFIG: dict | None = None
+
+
+def _atomic_yaml_write(path: str, value: dict) -> None:
+    """Durably replace a private YAML file without exposing a partial write."""
+    parent = os.path.dirname(path) or "."
+    os.makedirs(parent, mode=0o700, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.", dir=parent)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            yaml.safe_dump(value, handle, sort_keys=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+        os.chmod(path, 0o600)
+        try:
+            dir_fd = os.open(parent, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass
+    finally:
+        try:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+def _migrate_config(value: dict) -> dict:
+    migrated = copy.deepcopy(value)
+    try:
+        source_schema = int(migrated.get("schema_version", 0) or 0)
+    except (TypeError, ValueError):
+        source_schema = 0
+    aliases = {
+        "auto_apply_min_interval_s": "auto_apply_min_interval_seconds",
+    }
+    for old, new in aliases.items():
+        if new not in migrated and old in migrated:
+            migrated[new] = migrated[old]
+    if "auto_apply_hysteresis_percent" not in migrated and "auto_apply_hysteresis_duty" in migrated:
+        try:
+            migrated["auto_apply_hysteresis_percent"] = round(
+                int(migrated["auto_apply_hysteresis_duty"]) * 100 / 255
+            )
+        except (TypeError, ValueError):
+            pass
+    if "exclude_devices" not in migrated and isinstance(migrated.get("excluded_devices"), list):
+        migrated["exclude_devices"] = migrated["excluded_devices"]
+    # Only migrate legacy single-port installs that predate the controllers
+    # key. An explicitly empty list means the user removed all controllers.
+    if "controllers" not in migrated and SERIAL_PREF:
+        migrated["controllers"] = [{
+            "id": "primary",
+            "name": "Primary controller",
+            # The only controller supported by the pre-v2 schema was the
+            # one-channel Pico/RP2040 design.
+            "type": "diy",
+            "port": SERIAL_PREF,
+            "baud": SERIAL_BAUD,
+        }]
+    elif source_schema < 2 and isinstance(migrated.get("controllers"), list):
+        # Older UI versions called the existing Pico board "official" or
+        # "fanbridge". Schema 2 reserves `official` for the separate future
+        # six-channel product, so migrate only genuinely old persisted data.
+        for controller in migrated["controllers"]:
+            if not isinstance(controller, dict):
+                continue
+            legacy_type = str(controller.get("type") or "").strip().lower()
+            if legacy_type in {"official", "fanbridge", "pico", "rp2040"}:
+                controller["type"] = "diy"
+    migrated["schema_version"] = int(DEFAULT_CONFIG.get("schema_version", 3))
+    return migrated
 
 def _load_users() -> dict:
-    try:
+    with _USERS_LOCK:
         if not os.path.exists(USERS_PATH):
             return {}
-        with open(USERS_PATH, "r") as f:
-            data = yaml.safe_load(f) or {}
-            return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
+        try:
+            with open(USERS_PATH, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+            if not isinstance(data, dict):
+                raise ValueError("users file must contain a mapping")
+            os.chmod(USERS_PATH, 0o600)
+            return data
+        except Exception as exc:
+            log.error("Unable to read users file %s: %s", USERS_PATH, exc)
+            raise
 
 def _save_users(users: dict) -> None:
-    try:
-        os.makedirs(os.path.dirname(USERS_PATH), exist_ok=True)
-    except Exception:
-        pass
-    with open(USERS_PATH, "w") as f:
-        yaml.safe_dump(users, f, sort_keys=False)
+    with _USERS_LOCK:
+        _atomic_yaml_write(USERS_PATH, users)
 
 # Rate limiting (per-IP, per-key)
 # _RATE maps (ip, key) -> [timestamps]
@@ -394,20 +505,25 @@ def _allow(ip: str, key: str, *, limit: int = 20, window: int = 60) -> bool:
     - window in seconds, sliding.
     """
     try:
-        now = time.time()
-        k = (ip or "?", key or "*")
-        arr = _RATE.get(k, [])
-        # drop old
-        arr = [t for t in arr if now - t < window]
-        if len(arr) >= limit:
+        now = time.monotonic()
+        k = ((ip or "?")[:64], (key or "*")[:64])
+        with _RATE_LOCK:
+            # Bound memory even when many spoofed/ephemeral clients connect.
+            if len(_RATE) > 4096:
+                stale = [rk for rk, vals in _RATE.items() if not vals or now - vals[-1] >= window]
+                for rk in stale[:2048]:
+                    _RATE.pop(rk, None)
+            arr = [t for t in _RATE.get(k, []) if now - t < window]
+            if len(arr) >= limit:
+                _RATE[k] = arr
+                return False
+            arr.append(now)
             _RATE[k] = arr
-            return False
-        arr.append(now)
-        _RATE[k] = arr
-        return True
+            return True
     except Exception:
-        # fail-open
-        return True
+        # Authentication and hardware throttles must not disappear if the
+        # limiter's in-memory state is unexpectedly damaged.
+        return False
 
 def _ensure_csrf_token() -> str:
     tok = session.get("csrf_token")
@@ -417,7 +533,7 @@ def _ensure_csrf_token() -> str:
     return tok
 
 def _require_csrf() -> bool:
-    sent = request.headers.get("X-CSRF-Token", "")
+    sent = request.headers.get("X-CSRF-Token", "") or request.form.get("csrf_token", "")
     good = session.get("csrf_token")
     if not good or not secrets.compare_digest(sent, good):
         return False
@@ -441,46 +557,248 @@ def _merge_defaults(user_cfg: dict, defaults: dict) -> dict:
             merged[k] = v
     return merged
 
+
+_CONFIG_CONTROLLER_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+_CONTROLLER_NAME_MAX = 24
+_CONFIG_DEVICE_KEY_RE = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
+_CONFIG_ALLOWED_BAUDS = {9600, 19200, 38400, 57600, 115200, 230400}
+_CONFIG_PORT_PREFIXES = (
+    "/dev/serial/by-id/", "/dev/ttyACM", "/dev/ttyUSB",
+    "/dev/cu.usbmodem", "/dev/tty.usbmodem", "/tmp/ttyFAN",  # nosec B108 - explicit dev mode
+)
+
+
+def _normalise_config(value: dict) -> dict:
+    """Return a complete, type-safe configuration suitable for actuation.
+
+    YAML accepts values such as ``"false"`` and ``controllers: null`` that
+    are syntactically valid but unsafe for Python truthiness/iteration.  This
+    boundary deliberately uses defaults (and disables automatic output) when
+    persisted types are wrong. Unknown keys are dropped so stale development
+    settings cannot silently become an application API.
+    """
+    source = value if isinstance(value, dict) else {}
+
+    def integer(key: str, low: int, high: int) -> int:
+        default = int(DEFAULT_CONFIG[key])
+        raw = source.get(key, default)
+        if isinstance(raw, bool):
+            return default
+        try:
+            result = int(raw)
+        except (TypeError, ValueError):
+            return default
+        return result if low <= result <= high else default
+
+    def curve(kind: str) -> tuple[list[int], list[int]]:
+        t_key = f"{kind}_thresholds"
+        p_key = f"{kind}_pwm"
+        raw_t = source.get(t_key)
+        raw_p = source.get(p_key)
+        if not isinstance(raw_t, list) or not isinstance(raw_p, list):
+            return list(DEFAULT_CONFIG[t_key]), list(DEFAULT_CONFIG[p_key])
+        try:
+            thresholds = [int(item) for item in raw_t if not isinstance(item, bool)]
+            outputs = [int(item) for item in raw_p if not isinstance(item, bool)]
+        except (TypeError, ValueError):
+            return list(DEFAULT_CONFIG[t_key]), list(DEFAULT_CONFIG[p_key])
+        valid = (
+            2 <= len(thresholds) <= 32
+            and len(thresholds) == len(raw_t) == len(outputs) == len(raw_p)
+            and all(0 <= item <= 120 for item in thresholds)
+            and all(right > left for left, right in zip(thresholds, thresholds[1:]))
+            and all(0 <= item <= 100 for item in outputs)
+            and all(right >= left for left, right in zip(outputs, outputs[1:]))
+        )
+        if not valid:
+            return list(DEFAULT_CONFIG[t_key]), list(DEFAULT_CONFIG[p_key])
+        return thresholds, outputs
+
+    controllers: list[dict] = []
+    seen_ids: set[str] = set()
+    seen_ports: set[str] = set()
+    seen_hardware_uids: set[str] = set()
+    raw_controllers = source.get("controllers")
+    if isinstance(raw_controllers, list):
+        for raw in raw_controllers[:32]:
+            if not isinstance(raw, dict):
+                continue
+            cid = str(raw.get("id") or "").strip().lower()
+            name = str(raw.get("name") or cid).strip()
+            if len(name) > _CONTROLLER_NAME_MAX:
+                name = name[:_CONTROLLER_NAME_MAX].rstrip()
+            port = str(raw.get("port") or "").strip()
+            try:
+                baud = int(raw.get("baud", 115200))
+            except (TypeError, ValueError):
+                baud = 0
+            if (
+                not _CONFIG_CONTROLLER_ID_RE.fullmatch(cid)
+                or not name or len(name) > _CONTROLLER_NAME_MAX
+                or any(ord(ch) < 32 for ch in name)
+                or not port or len(port) > 256 or "\x00" in port
+                or not port.startswith(_CONFIG_PORT_PREFIXES)
+                or baud not in _CONFIG_ALLOWED_BAUDS
+            ):
+                continue
+            physical = serial_svc.canonical_port(port)
+            if cid in seen_ids or (physical and physical in seen_ports):
+                continue
+            kind = str(raw.get("type") or "unknown").strip().lower()
+            if kind not in {"diy", "official", "unknown"}:
+                kind = "unknown"
+            hardware_uid = serial_svc.normalise_hardware_uid(raw.get("hardware_uid"))
+            if hardware_uid and hardware_uid in seen_hardware_uids:
+                continue
+            controller = {
+                "id": cid,
+                "name": name,
+                "type": kind,
+                "port": port,
+                "baud": baud,
+            }
+            if hardware_uid:
+                controller["hardware_uid"] = hardware_uid
+                seen_hardware_uids.add(hardware_uid)
+            controllers.append(controller)
+            seen_ids.add(cid)
+            if physical:
+                seen_ports.add(physical)
+
+    excludes: list[str] = []
+    raw_excludes = source.get("exclude_devices")
+    if isinstance(raw_excludes, list):
+        excludes = sorted({
+            str(item).strip() for item in raw_excludes
+            if _CONFIG_DEVICE_KEY_RE.fullmatch(str(item).strip())
+        })[:256]
+
+    controller_ids = {item["id"] for item in controllers}
+    assignments: dict[str, str] = {}
+    raw_assignments = source.get("drive_assignments")
+    if isinstance(raw_assignments, dict):
+        for raw_key, raw_target in list(raw_assignments.items())[:256]:
+            key = str(raw_key).strip()
+            if not _CONFIG_DEVICE_KEY_RE.fullmatch(key):
+                continue
+            target = str(raw_target).strip()
+            # Each drive is routed to one existing controller or not at all.
+            assignments[key] = target if target in {"none", *controller_ids} else "none"
+
+    hdd_thresholds, hdd_pwm = curve("hdd")
+    ssd_thresholds, ssd_pwm = curve("ssd")
+    normalised = {
+        "schema_version": int(DEFAULT_CONFIG["schema_version"]),
+        "controllers": controllers,
+        "poll_interval_seconds": integer("poll_interval_seconds", 3, 60),
+        "control_interval_seconds": integer("control_interval_seconds", 2, 30),
+        "hdd_thresholds": hdd_thresholds,
+        "hdd_pwm": hdd_pwm,
+        "ssd_thresholds": ssd_thresholds,
+        "ssd_pwm": ssd_pwm,
+        "single_override_hdd_c": integer("single_override_hdd_c", 20, 90),
+        "single_override_ssd_c": integer("single_override_ssd_c", 20, 110),
+        "override_pwm": 100,
+        "fallback_pwm": integer("fallback_pwm", 0, 100),
+        # Safety faults and single-drive overrides are never user-derated.
+        "failsafe_pwm": 100,
+        "pwm_hysteresis": integer("pwm_hysteresis", 0, 25),
+        "exclude_devices": excludes,
+        "drive_assignments": assignments,
+        "idle_cutoff_hdd_c": integer("idle_cutoff_hdd_c", 0, 120),
+        "idle_cutoff_ssd_c": integer("idle_cutoff_ssd_c", 0, 120),
+        # Only a literal YAML/JSON boolean can authorise hardware output.
+        "auto_apply": source.get("auto_apply") is True,
+        "auto_apply_min_interval_seconds": integer("auto_apply_min_interval_seconds", 1, 60),
+        "auto_apply_refresh_interval_seconds": integer("auto_apply_refresh_interval_seconds", 5, 30),
+        "auto_apply_hysteresis_percent": integer("auto_apply_hysteresis_percent", 0, 25),
+    }
+
+    # Simulation is an explicit, environment-gated developer facility. Keep a
+    # bounded fixture only when the operator deliberately supplied one.
+    sim = source.get("sim")
+    if isinstance(sim, dict) and isinstance(sim.get("drives"), list):
+        normalised["sim"] = {"drives": [
+            copy.deepcopy(item) for item in sim["drives"][:256]
+            if isinstance(item, dict)
+        ]}
+    return normalised
+
+
+def _sync_serial_controllers(cfg: dict) -> None:
+    desired = {
+        str(item.get("id")): item
+        for item in (cfg.get("controllers") or [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    registered = {item["id"] for item in serial_svc.list_registered_controllers()}
+    for cid in registered - set(desired):
+        stopped = serial_svc.safe_stop_controller(cid)
+        if not stopped.get("ok"):
+            log.warning(
+                "controller removed before 100%% safe-stop was verified | cid=%s error=%s",
+                cid,
+                stopped.get("error") or "unknown",
+            )
+        serial_svc.unregister_controller(cid)
+    for cid, item in desired.items():
+        if not serial_svc.register_controller(
+            cid,
+            str(item.get("port") or ""),
+            int(item.get("baud", 115200)),
+            expected_type=str(item.get("type") or "unknown"),
+            expected_uid=item.get("hardware_uid"),
+        ):
+            log.error("Unable to register configured controller | cid=%s", cid)
+
 def ensure_config_exists():
-    if not os.path.exists(CONFIG_PATH):
-        os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
-        with open(CONFIG_PATH, "w") as f:
-            yaml.safe_dump(DEFAULT_CONFIG, f, sort_keys=False)
-        log.info("Created default config at %s", CONFIG_PATH)
+    with _CONFIG_LOCK:
+        if not os.path.exists(CONFIG_PATH):
+            initial = _normalise_config(_migrate_config(DEFAULT_CONFIG))
+            _atomic_yaml_write(CONFIG_PATH, initial)
+            log.info("Created default config at %s", CONFIG_PATH)
 
 def load_config():
+    global _LAST_GOOD_CONFIG
     ensure_config_exists()
-    try:
-        with open(CONFIG_PATH, "r") as f:
-            user_cfg = yaml.safe_load(f) or {}
-    except Exception:
-        with open(CONFIG_PATH, "w") as wf:
-            yaml.safe_dump(DEFAULT_CONFIG, wf, sort_keys=False)
-        log.warning("Config unreadable; rewrote defaults at %s", CONFIG_PATH)
-        return DEFAULT_CONFIG
-    merged = _merge_defaults(user_cfg, DEFAULT_CONFIG)
-    if merged != user_cfg:
+    with _CONFIG_LOCK:
         try:
-            with open(CONFIG_PATH, "w") as f:
-                yaml.safe_dump(merged, f, sort_keys=False)
-            log.info("Normalised config with defaults (saved)")
-        except Exception:
-            pass
-    for c in merged.get("controllers", []):
-        if c.get("id"):
-            serial_svc.register_controller(c["id"], c.get("port", ""), c.get("baud", 115200))
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                user_cfg = yaml.safe_load(f) or {}
+            if not isinstance(user_cfg, dict):
+                raise ValueError("configuration root must be a mapping")
+            migrated = _migrate_config(user_cfg)
+            merged = _normalise_config(_merge_defaults(migrated, DEFAULT_CONFIG))
+            if merged != user_cfg:
+                _atomic_yaml_write(CONFIG_PATH, merged)
+                log.warning("Normalised configuration to safe schema %s", merged.get("schema_version"))
+            else:
+                os.chmod(CONFIG_PATH, 0o600)
+            _LAST_GOOD_CONFIG = copy.deepcopy(merged)
+        except Exception as exc:
+            log.error("Configuration unreadable; retaining the last known good state: %s", exc)
+            if _LAST_GOOD_CONFIG is None:
+                raise RuntimeError(f"cannot load configuration {CONFIG_PATH}: {exc}") from exc
+            merged = copy.deepcopy(_LAST_GOOD_CONFIG)
+    _sync_serial_controllers(merged)
     return merged
 
 def save_config(cfg: dict):
-    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
-    with open(CONFIG_PATH, "w") as f:
-        yaml.safe_dump(cfg, f, sort_keys=False)
+    global _LAST_GOOD_CONFIG
+    if not isinstance(cfg, dict):
+        raise ValueError("configuration must be a mapping")
+    with _CONFIG_LOCK:
+        merged = _normalise_config(_merge_defaults(_migrate_config(cfg), DEFAULT_CONFIG))
+        _atomic_yaml_write(CONFIG_PATH, merged)
+        _LAST_GOOD_CONFIG = copy.deepcopy(merged)
+    _sync_serial_controllers(merged)
+    wake = globals().get("_CONTROL_WAKE")
+    if wake is not None:
+        wake.set()
 
-cfg = load_config()
+load_config()
 
     
-
-from services.disks import read_unraid_disks
 
     # Serial helpers moved to services.serial
 
@@ -491,37 +809,7 @@ from services.disks import read_unraid_disks
 # ---------- Serial send helpers used by API ----------
 #
 # get currently preferred port (same logic as get_serial_status)
-from typing import Any
 import json as _json
-import urllib.request
-import urllib.error
-import tempfile
-import shutil
-import subprocess
-import stat
-
-
-# ---------- RP update helpers ----------
-def _has_cap_sys_admin() -> bool:
-    """Return True only if CAP_SYS_ADMIN is effective in this process.
-
-    The previous heuristic treated any non-zero CapEff as privileged and
-    even fell back to checking for /dev/disk/by-label, which can be present
-    in unprivileged containers via bind mounts. This precise check reads
-    CapEff from /proc/self/status, interprets it as a hex bitmask, and
-    returns True iff bit 21 (CAP_SYS_ADMIN) is set.
-    """
-    try:
-        with open("/proc/self/status", "r", encoding="utf-8", errors="ignore") as f:
-            for ln in f:
-                if ln.startswith("CapEff:"):
-                    hexmask = ln.split(":", 1)[1].strip()
-                    # CapEff is hex; CAP_SYS_ADMIN is bit 21
-                    mask = int(hexmask, 16)
-                    return bool(mask & (1 << 21))
-    except Exception:
-        pass
-    return False
 
 def _usb_info_for_port(port: str | None) -> dict:
     info: dict = {}
@@ -546,133 +834,6 @@ def _usb_info_for_port(port: str | None) -> dict:
             pass
     return info
 
-def _http_get_json(url: str, timeout: float = 6.0) -> dict | None:
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "fanbridge/1.0"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            if 200 <= resp.status < 300:
-                data = resp.read()
-                return _json.loads(data.decode("utf-8", errors="ignore"))
-    except Exception:
-        return None
-    return None
-
-def _select_latest_for_board(items: list[dict], board: str) -> dict | None:
-    # items: [{board, version, url}]
-    def parse_ver(v: str) -> tuple:
-        try:
-            core = v.strip().lstrip("vV")
-            parts = core.split("-")[0]
-            nums = [int(x) for x in parts.split(".") if x.isdigit()]
-            return tuple(nums + [0] * (3 - len(nums)))
-        except Exception:
-            return (0, 0, 0)
-    candidates = [it for it in (items or []) if str(it.get("board", "")).lower() == str(board).lower()]
-    candidates.sort(key=lambda it: parse_ver(str(it.get("version", "0"))), reverse=True)
-    return candidates[0] if candidates else None
-
-def _find_rp2_dev_symlink() -> str | None:
-    try:
-        path = "/dev/disk/by-label/RPI-RP2"
-        if os.path.exists(path):
-            tgt = os.path.realpath(path)
-            if tgt and os.path.exists(tgt):
-                return tgt
-    except Exception:
-        pass
-    return None
-
-def _is_block_device(dev: str) -> bool:
-    try:
-        st = os.stat(dev)
-        return stat.S_ISBLK(st.st_mode)
-    except Exception:
-        return False
-
-def _sys_read(path: str) -> str:
-    try:
-        with open(path, "r", encoding="utf-8", errors="ignore") as f:
-            return f.read().strip()
-    except Exception:
-        return ""
-
-def _probe_partition_is_rp2(dev: str) -> bool:
-    # Best-effort: mount RO, check for INFO_UF2.TXT or INDEX.HTM
-    tmp = tempfile.mkdtemp(prefix="rp2probe-")
-    try:
-        cp = subprocess.run(["mount", "-o", "ro", dev, tmp], capture_output=True, text=True, timeout=5)
-        if cp.returncode != 0:
-            return False
-        try:
-            names = set(os.listdir(tmp))
-            return ("INFO_UF2.TXT" in names) or ("INDEX.HTM" in names)
-        except Exception:
-            return False
-    finally:
-        try:
-            _umount(tmp)
-        except Exception:
-            pass
-        try:
-            shutil.rmtree(tmp, ignore_errors=True)
-        except Exception:
-            pass
-
-def _find_rp2_block_device() -> str | None:
-    # 1) Try the by-label symlink first
-    dev = _find_rp2_dev_symlink()
-    if dev and _is_block_device(dev):
-        return dev
-    # 2) Scan removable block devices and probe partitions
-    try:
-        for b in sorted(glob.glob("/sys/block/sd*")):
-            # removable flag (1 = removable)
-            name = os.path.basename(b)
-            rem = _sys_read(f"/sys/block/{name}/removable")
-            if rem != "1":
-                continue
-            # partitions (e.g., sda1, sdb1)
-            parts = sorted(glob.glob(f"/sys/block/{name}/{name}[0-9]"))
-            for p in parts:
-                part = os.path.basename(p)
-                devnode = f"/dev/{part}"
-                if not _is_block_device(devnode):
-                    continue
-                try:
-                    if _probe_partition_is_rp2(devnode):
-                        return devnode
-                except Exception:
-                    continue
-    except Exception:
-        pass
-    return None
-
-def _mount_device(dev: str, mount_point: str) -> tuple[bool, str | None]:
-    try:
-        os.makedirs(mount_point, exist_ok=True)
-        # Use sync + umask for permissive writes
-        args = ["mount", "-o", "sync,umask=000", dev, mount_point]
-        cp = subprocess.run(args, capture_output=True, text=True, timeout=8)
-        if cp.returncode == 0:
-            return True, None
-        # Fallback: try explicitly as vfat (RP2 uses FAT)
-        cp2 = subprocess.run(["mount", "-t", "vfat", "-o", "sync,umask=000", dev, mount_point], capture_output=True, text=True, timeout=8)
-        if cp2.returncode == 0:
-            return True, None
-        err = (cp.stderr or cp.stdout or "").strip()
-        if not err:
-            err = (cp2.stderr or cp2.stdout or "").strip()
-        return False, err or "mount failed"
-    except Exception as e:
-        return False, str(e)
-
-def _umount(mount_point: str) -> None:
-    try:
-        subprocess.run(["umount", mount_point], capture_output=True, text=True, timeout=5)
-    except Exception:
-        pass
-
-
 # ---------- PWM logic ----------
 from services.pwm_calculator import compute_status as _compute_status_svc
 
@@ -683,29 +844,211 @@ def compute_status():
         'in_docker': _in_docker,
         'app_version': APP_VERSION,
         'disks_stale_warn_sec': DISKS_STALE_WARN_SEC,
+        'allow_simulation': os.environ.get("FANBRIDGE_ALLOW_SIMULATION", "0") == "1",
         'dbg_should': _dbg_should,
         'warn_once': _warn_once
     }
     return _compute_status_svc(app_context)
+
+
+_CONTROL_STATE_LOCK = threading.RLock()
+_CONTROL_CYCLE_LOCK = threading.Lock()
+_CONTROL_WAKE = threading.Event()
+_CONTROL_THREAD: threading.Thread | None = None
+_CONTROL_STATE: dict = {
+    "started_at": None,
+    "last_attempt_at": None,
+    "last_success_at": None,
+    "last_error": None,
+    "snapshot": None,
+}
+
+
+def _adopt_persistent_controller_identity(cid: str, identity: dict | None) -> str | None:
+    """Persist a protocol-2 UID for a previously port-bound controller."""
+    if not isinstance(identity, dict):
+        return None
+    try:
+        protocol = int(identity.get("protocol") or 0)
+    except (TypeError, ValueError):
+        return None
+    if protocol < 2:
+        return None
+    hardware_uid = serial_svc.normalise_hardware_uid(identity.get("hardware_uid"))
+    if not hardware_uid:
+        return None
+    with _MUTATION_LOCK:
+        config = load_config()
+        controller = next((
+            item for item in config.get("controllers", [])
+            if isinstance(item, dict) and item.get("id") == cid
+        ), None)
+        if controller is None:
+            return None
+        existing_uid = serial_svc.normalise_hardware_uid(controller.get("hardware_uid"))
+        if existing_uid:
+            return existing_uid if existing_uid == hardware_uid else None
+        duplicate = next((
+            item for item in config.get("controllers", [])
+            if isinstance(item, dict)
+            and item.get("id") != cid
+            and serial_svc.normalise_hardware_uid(item.get("hardware_uid")) == hardware_uid
+        ), None)
+        if duplicate is not None:
+            log.error(
+                "refusing controller UID enrollment because it is already assigned | cid=%s existing_cid=%s uid=%s",
+                cid, duplicate.get("id"), hardware_uid,
+            )
+            return None
+        controller["hardware_uid"] = hardware_uid
+        save_config(config)
+        log.info(
+            "enrolled persistent controller hardware UID | cid=%s uid=%s",
+            cid, hardware_uid,
+        )
+        return hardware_uid
+
+
+def _controller_telemetry(data: dict) -> None:
+    """Attach bounded serial status/telemetry during the single control cycle."""
+    for controller in data.get("controllers", []):
+        cid = str(controller.get("id") or "")
+        if not cid:
+            continue
+        try:
+            serial_status = serial_svc.get_serial_status(cid, full=False)
+            controller["serial"] = {
+                key: serial_status.get(key)
+                for key in ("preferred", "available", "connected", "baud", "message")
+            }
+            controller["telemetry"] = {}
+            if serial_status.get("connected"):
+                adopted_uid = _adopt_persistent_controller_identity(
+                    cid, serial_status.get("identity")
+                )
+                if adopted_uid:
+                    controller["hardware_uid"] = adopted_uid
+                    controller["persistent_identity"] = True
+                result = serial_svc.serial_send_line(cid, "STATUS", expect_reply=True, timeout=0.4)
+                reply = result.get("reply") if result.get("ok") else None
+                if reply:
+                    try:
+                        telemetry = _json.loads(reply)
+                        if isinstance(telemetry, dict):
+                            controller["telemetry"] = telemetry
+                    except (TypeError, ValueError):
+                        controller["telemetry_error"] = "invalid STATUS response"
+                elif not result.get("ok"):
+                    controller["telemetry_error"] = str(result.get("error") or "STATUS failed")
+        except Exception as exc:
+            controller["serial"] = {"connected": False, "message": str(exc)}
+            controller["telemetry"] = {}
+
+
+def _run_control_cycle() -> dict | None:
+    if not _CONTROL_CYCLE_LOCK.acquire(blocking=False):
+        return None
+    try:
+        now = int(time.time())
+        with _CONTROL_STATE_LOCK:
+            _CONTROL_STATE["last_attempt_at"] = now
+        try:
+            snapshot = compute_status()
+            _controller_telemetry(snapshot)
+            with _CONTROL_STATE_LOCK:
+                _CONTROL_STATE["snapshot"] = copy.deepcopy(snapshot)
+                _CONTROL_STATE["last_success_at"] = int(time.time())
+                _CONTROL_STATE["last_error"] = None
+            return snapshot
+        except Exception as exc:
+            log.exception("control cycle failed: %s", exc)
+            with _CONTROL_STATE_LOCK:
+                _CONTROL_STATE["last_error"] = "control cycle failed"
+            return None
+    finally:
+        _CONTROL_CYCLE_LOCK.release()
+
+
+def _control_worker() -> None:
+    with _CONTROL_STATE_LOCK:
+        _CONTROL_STATE["started_at"] = int(time.time())
+    while True:
+        _run_control_cycle()
+        try:
+            interval = int(load_config().get("control_interval_seconds", 10))
+        except Exception:
+            interval = 10
+        interval = max(2, min(30, interval))
+        _CONTROL_WAKE.wait(interval)
+        _CONTROL_WAKE.clear()
+
+
+def _start_control_loop() -> None:
+    global _CONTROL_THREAD
+    if os.environ.get("FANBRIDGE_CONTROL_LOOP", "1") != "1":
+        return
+    with _CONTROL_STATE_LOCK:
+        if _CONTROL_THREAD and _CONTROL_THREAD.is_alive():
+            return
+        _CONTROL_THREAD = threading.Thread(target=_control_worker, name="fanbridge-control", daemon=True)
+        _CONTROL_THREAD.start()
+
+
+def _control_summary(include_snapshot: bool = False) -> dict:
+    with _CONTROL_STATE_LOCK:
+        state = copy.deepcopy(_CONTROL_STATE)
+    now = int(time.time())
+    last_success = state.get("last_success_at")
+    summary = {
+        "running": bool(_CONTROL_THREAD and _CONTROL_THREAD.is_alive()),
+        "last_attempt_at": state.get("last_attempt_at"),
+        "last_success_at": last_success,
+        "last_success_age_s": (now - int(last_success)) if last_success else None,
+        "error": state.get("last_error"),
+    }
+    if include_snapshot:
+        summary["snapshot"] = state.get("snapshot")
+    return summary
+
+
+def _control_is_healthy(control: dict) -> bool:
+    return bool(
+        control.get("running")
+        and control.get("last_success_age_s") is not None
+        and int(control["last_success_age_s"]) <= 60
+        and not control.get("error")
+    )
+
+
 @app.get("/health")
 def health():
-    # Also drive auto-apply via the Docker healthcheck so PWM updates
-    # continue even when no browser is polling /api/status.
-    try:
-        compute_status()  # safe no-op if auto_apply is disabled
-    except Exception:
-        # Never fail health due to background compute/apply issues
-        pass
-    return jsonify({"status": "ok", "uptime_s": int(time.time() - STARTED)})
+    # Liveness is deliberately read-only. Hardware actuation belongs only to
+    # the dedicated control thread.
+    control = _control_summary()
+    healthy = _control_is_healthy(control)
+    state = "ok" if healthy else "degraded"
+    return jsonify({"status": state, "uptime_s": int(time.time() - STARTED), "control": control}), (200 if healthy else 503)
+
+
+@app.get("/api/control/health")
+def control_health():
+    control = _control_summary()
+    healthy = _control_is_healthy(control)
+    return jsonify({"ok": healthy, "control": control}), (200 if healthy else 503)
 
 # Toggle auto-apply on/off
 @app.post("/api/auto_apply")
 def api_auto_apply():
     data = request.get_json(force=True, silent=True) or {}
-    enable = bool(data.get("enabled"))
+    if not isinstance(data, dict):
+        return jsonify({"ok": False, "error": "JSON object required"}), 400
+    enable = data.get("enabled")
+    if not isinstance(enable, bool):
+        return jsonify({"ok": False, "error": "enabled must be a boolean"}), 400
     c = load_config()
     c["auto_apply"] = enable
     save_config(c)
+    _CONTROL_WAKE.set()
     try:
         _audit("auto_apply.toggle", enabled=enable)
     except Exception:
@@ -725,15 +1068,23 @@ def add_no_cache(resp):
         resp.headers.setdefault("X-Content-Type-Options", "nosniff")
         resp.headers.setdefault("X-Frame-Options", "DENY")
         resp.headers.setdefault("Referrer-Policy", "same-origin")
-        # CSP for the app: allow Ko‑fi iframe (frame) and https images. No external scripts except Chart.js.
+        # Chart.js is bundled by Vite; no third-party script execution is
+        # required. Inline styles remain temporarily necessary for the UI.
         csp = (
             "default-src 'self'; "
-            "img-src 'self' data: https:; "
+            "img-src 'self' data:; "
             "style-src 'self' 'unsafe-inline'; "
-            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-            "frame-src 'self' https://ko-fi.com"
+            "script-src 'self'; "
+            "connect-src 'self'; "
+            "font-src 'self'; "
+            "object-src 'none'; "
+            "base-uri 'self'; "
+            "form-action 'self'; "
+            "frame-ancestors 'none'; "
+            "frame-src 'none'"
         )
         resp.headers.setdefault("Content-Security-Policy", csp)
+        resp.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
     except Exception:
         pass
     return resp
@@ -783,26 +1134,93 @@ def _not_found(e):
 
 @app.errorhandler(Exception)
 def _unhandled(e):
+    if isinstance(e, HTTPException):
+        if request.path.startswith("/api/"):
+            return jsonify({"ok": False, "error": e.name.lower()}), e.code
+        return e
     logging.getLogger("fanbridge").exception("Unhandled error for %s %s: %s", request.method, request.path, e)
-    return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": False, "error": "internal server error"}), 500
+
+
+def _safe_next_url(value: str | None) -> str:
+    from urllib.parse import urlsplit
+    target = (value or "").strip()
+    parts = urlsplit(target)
+    if not target.startswith("/") or target.startswith("//") or parts.scheme or parts.netloc:
+        return url_for("index")
+    return target
+
+
+def _user_hash(users: dict, username: str) -> str | None:
+    entry = (users.get("users") or {}).get(username)
+    if isinstance(entry, str):
+        return entry
+    if isinstance(entry, dict) and isinstance(entry.get("password_hash"), str):
+        return entry["password_hash"]
+    return None
+
+
+def _session_version(users: dict, username: str) -> int:
+    try:
+        return int((users.get("session_versions") or {}).get(username, 1))
+    except (TypeError, ValueError):
+        return 1
 
 @app.before_request
 def _auth_and_rate():
     p = request.path
+    ip = request.remote_addr or ""
+
+    # Login is public, but it is not exempt from CSRF or brute-force limits.
+    if p == "/login":
+        if request.method == "POST":
+            if not _allow(ip, "login", limit=8, window=300):
+                return jsonify({"ok": False, "error": "too many login attempts"}), 429
+            if not _require_csrf():
+                return jsonify({"ok": False, "error": "invalid CSRF token"}), 403
+        return
+
     # allow public endpoints
-    if p.startswith("/static/") or p in ("/login", "/health", "/api/app/version"):
+    if p.startswith("/static/") or p in ("/health", "/api/app/version"):
         return
     # require login
     if "user" not in session:
+        if p.startswith("/api/"):
+            return jsonify({"ok": False, "error": "authentication required"}), 401
         return redirect(url_for("login", next=request.path))
 
+    # Password changes invalidate other signed cookies even though Flask's
+    # session itself is client-side.
+    try:
+        users = _load_users()
+        username = str(session.get("user") or "")
+        if not _user_hash(users, username) or int(session.get("auth_version", 0)) != _session_version(users, username):
+            session.clear()
+            if p.startswith("/api/"):
+                return jsonify({"ok": False, "error": "session expired"}), 401
+            return redirect(url_for("login", next=request.path))
+    except Exception:
+        return jsonify({"ok": False, "error": "authentication store unavailable"}), 503
+
     # --- Rate limiting ---
-    # Skip rate limiting for safe GETs to keep UI snappy
+    # Most safe GETs are cache reads. Hardware diagnostics are deliberately
+    # bounded because they acquire the same physical serial lock as the
+    # cooling lease refresh.
     if request.method == "GET":
+        hardware_limits = {
+            "/api/ports": ("ports_probe", 10, 60),
+            "/api/serial/status": ("serial_status", 30, 60),
+            "/api/serial/tools": ("serial_tools", 20, 60),
+            "/api/rp/status": ("firmware_status", 10, 60),
+        }
+        limit_spec = hardware_limits.get(p)
+        if p == "/api/logs/download" and request.args.get("cid"):
+            limit_spec = ("serial_diagnostics", 10, 60)
+        if limit_spec and not _allow(ip, limit_spec[0], limit=limit_spec[1], window=limit_spec[2]):
+            return jsonify({"ok": False, "error": "too many hardware diagnostic requests"}), 429
         return
 
     # Per-endpoint buckets with relaxed limits for serial actions
-    ip = request.headers.get("X-Forwarded-For", request.remote_addr or "")
     key = "mutate"
     limit, window = 60, 60  # default for POST-ish
 
@@ -812,6 +1230,9 @@ def _auth_and_rate():
     elif p == "/api/serial/pwm":
         key = "serial_pwm"
         limit, window = 120, 60
+    elif p == "/api/ports/identify":
+        key = "controller_identify"
+        limit, window = 10, 60
     elif p in ("/api/settings", "/api/curves", "/api/reset_defaults", "/api/exclude", "/api/change_password"):
         key = p  # separate buckets for config endpoints
         limit, window = 30, 60
@@ -825,7 +1246,26 @@ def _auth_and_rate():
     # CSRF on modifying requests
     if request.method in ("POST", "PUT", "PATCH", "DELETE"):
         if not _require_csrf():
-            return make_response(("Invalid CSRF token", 403))
+            return jsonify({"ok": False, "error": "invalid CSRF token"}), 403
+
+
+@app.before_request
+def _serialize_state_mutations():
+    if request.method not in ("POST", "PUT", "PATCH", "DELETE"):
+        return
+    state_paths = {
+        "/api/auto_apply", "/api/config", "/api/settings", "/api/curves",
+        "/api/reset_defaults", "/api/exclude", "/api/change_password",
+    }
+    if request.path in state_paths or request.path == "/api/controllers" or request.path.startswith("/api/controllers/"):
+        _MUTATION_LOCK.acquire()
+        g._fanbridge_mutation_lock = True
+
+
+@app.teardown_request
+def _release_state_mutation(_error=None):
+    if getattr(g, "_fanbridge_mutation_lock", False):
+        _MUTATION_LOCK.release()
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -837,40 +1277,66 @@ def login():
             username = (request.form.get("username") or "").strip()
             password = request.form.get("password") or ""
             confirm  = request.form.get("confirm") or ""
-            if not username or not password or password != confirm:
-                return render_template("login.html", first_run=True, error="Please fill all fields; passwords must match.")
-            users = {"users": {username: generate_password_hash(password)}}
-            _save_users(users)
+            supplied_setup_token = request.form.get("setup_token") or ""
+            if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", username):
+                return render_template("login.html", first_run=True, error="Username must use letters, numbers, '.', '_' or '-'.", csrf_token=_ensure_csrf_token())
+            if len(password) < 12 or len(password) > 256 or password != confirm:
+                return render_template("login.html", first_run=True, error="Use a password of at least 12 characters and enter it twice.", csrf_token=_ensure_csrf_token())
+            expected_setup_token = _load_or_create_setup_token()
+            if not secrets.compare_digest(supplied_setup_token, expected_setup_token):
+                _audit("auth.setup_rejected", username=username)
+                return render_template("login.html", first_run=True, error="The one-time setup token is incorrect. Check the container log.", csrf_token=_ensure_csrf_token()), 403
+            # Re-read under the write lock so two first-run requests cannot
+            # both claim the installation.
+            with _USERS_LOCK:
+                current = _load_users()
+                if current.get("users"):
+                    return render_template("login.html", first_run=False, error="Setup has already been completed.", csrf_token=_ensure_csrf_token()), 409
+                users = {
+                    "users": {username: generate_password_hash(password)},
+                    "session_versions": {username: 1},
+                }
+                _save_users(users)
+            if not os.environ.get("FANBRIDGE_SETUP_TOKEN"):
+                try:
+                    _setup_token_path().unlink(missing_ok=True)
+                except OSError:
+                    pass
+            session.clear()
             session["user"] = username
+            session["auth_version"] = 1
             _ensure_csrf_token()
+            _audit("auth.setup_completed", username=username)
             return redirect(url_for("index"))
         else:
             username = (request.form.get("username") or "").strip()
             password = request.form.get("password") or ""
-            stored = (users.get("users") or {}).get(username)
+            stored = _user_hash(users, username)
             if stored and check_password_hash(stored, password):
+                session.clear()
                 session["user"] = username
+                session["auth_version"] = _session_version(users, username)
                 _ensure_csrf_token()
-                nxt = request.args.get("next") or url_for("index")
+                nxt = _safe_next_url(request.args.get("next"))
+                _audit("auth.login", username=username)
                 return redirect(nxt)
-            return render_template("login.html", first_run=False, error="Invalid username or password.")
+            _audit("auth.login_failed", username=username[:64])
+            return render_template("login.html", first_run=False, error="Invalid username or password.", csrf_token=_ensure_csrf_token())
 
     # GET
-    return render_template("login.html", first_run=first_run, error=None)
+    if first_run:
+        _load_or_create_setup_token()
+    return render_template("login.html", first_run=first_run, error=None, csrf_token=_ensure_csrf_token())
 
-@app.route("/logout", methods=["POST", "GET"])
+@app.post("/logout")
 def logout():
     session.clear()
-    if request.method == "POST":
-        # JS caller expects a quick success without navigation
-        return ("", 204)
-    # For direct browser hits, send them to the login form
-    return redirect(url_for("login"))
+    return ("", 204)
 
 @app.get("/")
 def index():
     try:
-        pi = int((cfg or {}).get("poll_interval_seconds", 7))
+        pi = int(load_config().get("poll_interval_seconds", 7))
     except Exception:
         pi = 7
     if pi < 3: pi = 3
@@ -886,30 +1352,51 @@ def index():
 
 @app.get("/api/status")
 def status():
-    data = compute_status()
-    try:
-        for c in data.get("controllers", []):
-            cid = c.get("id")
-            if cid:
-                ss = serial_svc.get_serial_status(cid, full=False)
-                c["serial"] = {
-                    "preferred": ss.get("preferred"),
-                    "available": ss.get("available"),
-                    "connected": ss.get("connected"),
-                    "baud": ss.get("baud"),
-                    "message": ss.get("message"),
-                }
-                c["telemetry"] = {}
-                if ss.get("connected"):
-                    res = serial_svc.serial_send_line(cid, "STATUS", expect_reply=True, timeout=0.2)
-                    if res.get("ok") and res.get("reply"):
-                        try:
-                            import json
-                            c["telemetry"] = json.loads(res["reply"])
-                        except Exception:
-                            pass
-    except Exception as e:
-        logging.getLogger("fanbridge").exception("serial status embed failed: %s", e)
+    state = _control_summary(include_snapshot=True)
+    data = state.pop("snapshot", None)
+    if not isinstance(data, dict) or not _control_is_healthy(state):
+        return jsonify({
+            "ok": False,
+            "error": "control state is unavailable or stale",
+            "control": state,
+        }), 503
+    config = load_config()
+    data = copy.deepcopy(data)
+    source = data.get("temperature_source")
+    if isinstance(source, dict) and source.get("mtime") is not None:
+        try:
+            source["age_seconds"] = max(0, int(time.time() - int(source["mtime"])))
+            stale_after = max(60, int(source.get("stale_after_seconds", DISKS_STALE_WARN_SEC)))
+            if source["age_seconds"] > stale_after:
+                source["stale"] = True
+                source["fault"] = "temperature_source_stale"
+        except (TypeError, ValueError):
+            source["age_seconds"] = None
+    data["ok"] = True
+    data["control"] = state
+    data["source"] = copy.deepcopy(data.get("temperature_source") or {})
+    data["settings"] = {
+        "poll_interval_seconds": int(config.get("poll_interval_seconds", 7)),
+        "control_interval_seconds": int(config.get("control_interval_seconds", 10)),
+        "single_override_hdd_c": int(config.get("single_override_hdd_c", 45)),
+        "single_override_ssd_c": int(config.get("single_override_ssd_c", 60)),
+        "auto_apply": bool(config.get("auto_apply")),
+        "auto_apply_min_interval_seconds": int(config.get("auto_apply_min_interval_seconds", 3)),
+        "auto_apply_refresh_interval_seconds": int(config.get("auto_apply_refresh_interval_seconds", 20)),
+        "auto_apply_hysteresis_percent": int(config.get("auto_apply_hysteresis_percent", 2)),
+        "fallback_pwm": int(config.get("fallback_pwm", 10)),
+        "failsafe_pwm": 100,
+        "excluded_devices": sorted(set(config.get("exclude_devices") or [])),
+        "drive_assignments": copy.deepcopy(config.get("drive_assignments") or {}),
+    }
+    data["curves"] = {
+        "hdd_thresholds": list(config.get("hdd_thresholds") or []),
+        "hdd_pwm": list(config.get("hdd_pwm") or []),
+        "ssd_thresholds": list(config.get("ssd_thresholds") or []),
+        "ssd_pwm": list(config.get("ssd_pwm") or []),
+    }
+    # `config` is a compatibility alias containing only UI-safe fields.
+    data["config"] = {**data["settings"], **data["curves"]}
     return jsonify(data)
 
 @app.get("/api/history")
@@ -919,6 +1406,7 @@ def history():
         hours = int(request.args.get("hours", "1"))
     except ValueError:
         hours = 1
+    hours = max(1, min(720, hours))
     return jsonify({"ok": True, "history": get_history(hours)})
 
 
@@ -926,34 +1414,163 @@ def history():
 
 # --------- API: Controllers and Ports ---------
 
+_CONTROLLER_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+_ALLOWED_BAUDS = {9600, 19200, 38400, 57600, 115200, 230400}
+
+
+def _valid_controller_port(port: str) -> bool:
+    if not port or len(port) > 256 or "\x00" in port:
+        return False
+    allowed_prefixes = (
+        "/dev/serial/by-id/", "/dev/ttyACM", "/dev/ttyUSB",
+        "/dev/cu.usbmodem", "/dev/tty.usbmodem",
+    )
+    if port.startswith(allowed_prefixes):
+        return True
+    return (
+        os.environ.get("FANBRIDGE_DEV_SERIAL", "0") == "1"
+        and port.startswith("/tmp/ttyFAN")  # nosec B108 - explicit dev mode only
+    )
+
+
+def _suggested_controller_name(controller_type: str, hardware_uid: str | None) -> str | None:
+    if controller_type == "diy" and hardware_uid:
+        return f"DIY-RP2040-{hardware_uid[-4:].upper()}"
+    return None
+
 @app.get("/api/ports")
 def get_ports():
     ports = serial_svc.list_serial_ports()
+    config = load_config()
+    controllers = config.get("controllers") or []
     results = []
     for p in ports:
-        ctype = serial_svc.identify_port(p)
-        results.append({"port": p, "type": ctype})
+        details = serial_svc.identify_port_details(p)
+        hardware_uid = serial_svc.normalise_hardware_uid(
+            details.get("hardware_uid") if isinstance(details, dict) else None
+        )
+        configured = next((
+            item for item in controllers
+            if isinstance(item, dict) and (
+                (hardware_uid and item.get("hardware_uid") == hardware_uid)
+                or serial_svc.canonical_port(item.get("port")) == serial_svc.canonical_port(p)
+            )
+        ), None)
+        results.append({
+            "port": p,
+            "type": details.get("type", "unknown") if isinstance(details, dict) else "unknown",
+            "board": details.get("board") if isinstance(details, dict) else None,
+            "protocol": details.get("protocol") if isinstance(details, dict) else None,
+            "channels": details.get("channels") if isinstance(details, dict) else None,
+            "hardware_uid": hardware_uid,
+            "persistent_identity": bool(hardware_uid),
+            "suggested_name": _suggested_controller_name(
+                details.get("type") if isinstance(details, dict) else "unknown",
+                hardware_uid,
+            ),
+            "identify_supported": bool(
+                isinstance(details, dict)
+                and details.get("type") == "diy"
+                and details.get("board") == "rp2040-zero"
+                and hardware_uid
+            ),
+            "configured_controller_id": configured.get("id") if configured else None,
+        })
     return jsonify({"ok": True, "ports": results})
+
+
+@app.post("/api/ports/identify")
+def identify_controller_port():
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({"ok": False, "error": "JSON object required"}), 400
+    port = str(data.get("port") or "").strip()
+    if not _valid_controller_port(port):
+        return jsonify({"ok": False, "error": "port is not an allowed mapped USB serial device"}), 400
+
+    config = load_config()
+    requested_physical = serial_svc.canonical_port(port)
+    configured = next((
+        item for item in config.get("controllers", [])
+        if isinstance(item, dict)
+        and serial_svc.canonical_port(item.get("port")) == requested_physical
+    ), None)
+    if configured is not None:
+        return jsonify({
+            "ok": False,
+            "error": f"serial port is already assigned to controller {configured.get('id')}",
+        }), 409
+
+    configured_uids = {
+        uid for item in config.get("controllers", [])
+        if isinstance(item, dict)
+        and (uid := serial_svc.normalise_hardware_uid(item.get("hardware_uid")))
+    }
+    result = serial_svc.identify_unregistered_controller(
+        port,
+        excluded_hardware_uids=configured_uids,
+    )
+    if result.get("ok"):
+        return jsonify(result)
+    code = str(result.get("code") or "")
+    status = 409 if code in {"already_assigned", "upgrade_required"} else 502
+    if code in {"invalid_port", "identity_failed"}:
+        status = 400
+    return jsonify(result), status
 
 @app.post("/api/controllers")
 def add_controller():
-    data = request.json or {}
-    cid = data.get("id")
-    cname = data.get("name")
-    ctype = data.get("type")
-    cport = data.get("port")
-    cbaud = int(data.get("baud", 115200))
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({"ok": False, "error": "JSON object required"}), 400
+    cid = str(data.get("id") or "").strip().lower()
+    cname = str(data.get("name") or "").strip()
+    cport = str(data.get("port") or "").strip()
+    try:
+        cbaud = int(data.get("baud", 115200))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "invalid baud rate"}), 400
+
+    if not _CONTROLLER_ID_RE.fullmatch(cid):
+        return jsonify({"ok": False, "error": "controller id must match [a-z][a-z0-9_-]{0,31}"}), 400
+    if not cname or len(cname) > _CONTROLLER_NAME_MAX or any(ord(ch) < 32 for ch in cname):
+        return jsonify({"ok": False, "error": f"controller name must be 1-{_CONTROLLER_NAME_MAX} printable characters"}), 400
+    if not _valid_controller_port(cport):
+        return jsonify({"ok": False, "error": "port is not an allowed mapped USB serial device"}), 400
+    if cbaud not in _ALLOWED_BAUDS:
+        return jsonify({"ok": False, "error": "unsupported baud rate"}), 400
+
+    identity = serial_svc.identify_port_details(cport)
+    detected_type = identity.get("type") if isinstance(identity, dict) else "unknown"
+    hardware_uid = serial_svc.normalise_hardware_uid(
+        identity.get("hardware_uid") if isinstance(identity, dict) else None
+    )
+    if detected_type not in {"official", "diy"} and os.environ.get("FANBRIDGE_ALLOW_UNVERIFIED_CONTROLLER", "0") != "1":
+        return jsonify({"ok": False, "error": "device did not identify as a FanBridge controller"}), 400
+    if detected_type == "official":
+        return jsonify({
+            "ok": False,
+            "error": "six-channel custom-controller support is reserved but not implemented in this host release",
+        }), 409
+    ctype = detected_type if detected_type in {"official", "diy"} else "unknown"
 
     if not cid or not ctype or not cport:
         return jsonify({"ok": False, "error": "Missing required fields"}), 400
 
     cfg = load_config()
     controllers = cfg.setdefault("controllers", [])
+    if len(controllers) >= 32:
+        return jsonify({"ok": False, "error": "maximum controller count reached"}), 409
     
     # Check if exists
     for c in controllers:
         if c.get("id") == cid:
             return jsonify({"ok": False, "error": "Controller ID already exists"}), 400
+        existing = str(c.get("port") or "")
+        if serial_svc.canonical_port(existing) == serial_svc.canonical_port(cport):
+            return jsonify({"ok": False, "error": "serial port is already assigned"}), 400
+        if hardware_uid and c.get("hardware_uid") == hardware_uid:
+            return jsonify({"ok": False, "error": "controller hardware UID is already assigned"}), 409
 
     new_c = {
         "id": cid,
@@ -962,14 +1579,63 @@ def add_controller():
         "port": cport,
         "baud": cbaud
     }
+    if hardware_uid:
+        new_c["hardware_uid"] = hardware_uid
+    if not serial_svc.register_controller(
+        cid,
+        cport,
+        cbaud,
+        expected_type=ctype,
+        expected_uid=hardware_uid,
+    ):
+        return jsonify({"ok": False, "error": "serial port or controller hardware UID is already registered"}), 409
     controllers.append(new_c)
-    save_config(cfg)
-    serial_svc.register_controller(cid, cport, cbaud)
+    try:
+        save_config(cfg)
+    except Exception:
+        serial_svc.unregister_controller(cid)
+        raise
+    _CONTROL_WAKE.set()
     
-    return jsonify({"ok": True})
+    return jsonify({
+        "ok": True,
+        "controller": new_c,
+        "persistent_identity": bool(hardware_uid),
+    })
+
+@app.patch("/api/controllers/<cid>")
+def update_controller(cid):
+    if not _CONTROLLER_ID_RE.fullmatch(cid):
+        return jsonify({"ok": False, "error": "invalid controller id"}), 400
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"ok": False, "error": "JSON object required"}), 400
+
+    cname = str(data.get("name") or "").strip()
+    if not cname or len(cname) > _CONTROLLER_NAME_MAX or any(ord(ch) < 32 for ch in cname):
+        return jsonify({"ok": False, "error": f"controller name must be 1-{_CONTROLLER_NAME_MAX} printable characters"}), 400
+
+    cfg = load_config()
+    controller = next(
+        (item for item in cfg.get("controllers", []) if item.get("id") == cid),
+        None,
+    )
+    if controller is None:
+        return jsonify({"ok": False, "error": "Controller not found"}), 404
+
+    controller["name"] = cname
+    save_config(cfg)
+    _CONTROL_WAKE.set()
+    return jsonify({
+        "ok": True,
+        "controller": {"id": cid, "name": cname},
+    })
 
 @app.delete("/api/controllers/<cid>")
 def delete_controller(cid):
+    if not _CONTROLLER_ID_RE.fullmatch(cid):
+        return jsonify({"ok": False, "error": "invalid controller id"}), 400
     cfg = load_config()
     controllers = cfg.get("controllers", [])
     
@@ -979,8 +1645,17 @@ def delete_controller(cid):
         return jsonify({"ok": False, "error": "Controller not found"}), 404
         
     cfg["controllers"] = new_controllers
+    assignments = cfg.get("drive_assignments")
+    if isinstance(assignments, dict):
+        cfg["drive_assignments"] = {
+            # A deleted hardware destination leaves its drives explicitly
+            # unassigned until the operator selects a replacement controller.
+            dev: ("none" if assigned == cid else assigned)
+            for dev, assigned in assignments.items()
+        }
     save_config(cfg)
     serial_svc.unregister_controller(cid)
+    _CONTROL_WAKE.set()
     
     return jsonify({"ok": True})
 
@@ -988,425 +1663,91 @@ def delete_controller(cid):
 
 
 
-# --------- API: RP status ---------
+# --------- API: Controller firmware status ---------
 @app.get("/api/rp/status")
 def api_rp_status():
-    c = load_config()
-    rp_cfg = c.get("rp", {}) if isinstance(c, dict) else {}
-    repo_url = rp_cfg.get("repo_url") or DEFAULT_CONFIG["rp"]["repo_url"]
-    board = rp_cfg.get("board") or "rp2040"
+    cid = (request.args.get("cid") or "").strip()
+    if not _CONTROLLER_ID_RE.fullmatch(cid):
+        return jsonify({"ok": False, "error": "valid cid parameter required"}), 400
+    config = load_config()
+    controller = next(
+        (item for item in config.get("controllers", []) if item.get("id") == cid),
+        None,
+    )
+    if not controller:
+        return jsonify({"ok": False, "error": "controller not found"}), 404
 
-    # Serial + controller version
-    sstat = serial_svc.get_serial_status(full=True)
-    ver = None
-    if sstat.get("connected"):
+    serial_status = serial_svc.get_serial_status(cid, full=True)
+    version = None
+    if serial_status.get("connected"):
         try:
-            vres = serial_svc.serial_send_line("version", expect_reply=True, timeout=0.5)
-            if vres.get("ok"):
-                ver = (vres.get("reply") or "").strip() or None
+            result = serial_svc.serial_send_line(cid, "VERSION", expect_reply=True, timeout=0.5)
+            if result.get("ok"):
+                version = (result.get("reply") or "").strip() or None
         except Exception:
             pass
-    usb = serial_svc.usb_info_for_port(sstat.get("preferred"))
+    identity = serial_status.get("identity")
+    if not isinstance(identity, dict):
+        identity = {}
 
-    # Try to fetch repo manifest (optional)
-    manifest_url = repo_url.rstrip("/") + "/manifest.json"
-    manifest = _http_get_json(manifest_url)
-    latest: dict | None = None
-    update_available = False
-    if isinstance(manifest, dict) and isinstance(manifest.get("items"), list):
-        items: list[dict] = list(manifest.get("items") or [])
-        latest = _select_latest_for_board(items, board)
-        if latest and ver:
-            try:
-                update_available = str(latest.get("version")) != str(ver)
-            except Exception:
-                update_available = False
-
-    payload = {
+    return jsonify({
         "ok": True,
-        "privileged": _has_cap_sys_admin(),
-        "serial": sstat,
-        "usb": usb,
-        "controller_version": ver,
-        "repo_url": repo_url,
-        "board": board,
-        "rp2_device": str(rp_cfg.get("rp2_device") or ""),
-        "manifest_url": manifest_url,
-        "latest": latest,
-        "update_available": bool(update_available),
-    }
-    return jsonify(payload)
+        "cid": cid,
+        "product": controller.get("type"),
+        "controller_version": version,
+        "board": identity.get("board"),
+        "protocol_version": identity.get("protocol"),
+        "channel_count": identity.get("channels"),
+        "serial": serial_status,
+        "usb": _usb_info_for_port(serial_status.get("preferred")),
+        "firmware_flash_enabled": False,
+        "manual_update_only": True,
+    })
 
 
-# --------- API: Set RP repo URL ---------
+def _firmware_update_disabled():
+    return jsonify({
+        "ok": False,
+        "error": "in-app firmware flashing is disabled and its implementation was removed; use the checksum-verified manual procedure",
+    }), 403
+
+
+# Retain small compatibility stubs so older clients receive an explicit answer.
 @app.post("/api/rp/repo")
 def api_rp_repo():
-    data = request.get_json(force=True, silent=True) or {}
-    url = (data.get("repo_url") or "").strip()
-    if not url:
-        return jsonify({"ok": False, "error": "missing repo_url"}), 400
-    c = load_config()
-    if "rp" not in c or not isinstance(c["rp"], dict):
-        c["rp"] = {}
-    c["rp"]["repo_url"] = url
-    try:
-        save_config(c)
-    except Exception:
-        pass
-    try:
-        _audit("rp.repo.update", repo_url=url)
-    except Exception:
-        pass
-    return jsonify({"ok": True, "repo_url": url})
+    return _firmware_update_disabled()
 
-# --------- API: Set preferred RP2 device path ---------
+
 @app.post("/api/rp/rp2_device")
 def api_rp_set_device():
-    data = request.get_json(force=True, silent=True) or {}
-    path = (data.get("rp2_device") or "").strip()
-    c = load_config()
-    if "rp" not in c or not isinstance(c["rp"], dict):
-        c["rp"] = {}
-    c["rp"]["rp2_device"] = path
-    try:
-        save_config(c)
-    except Exception:
-        pass
-    try:
-        _audit("rp.rp2_device.update", rp2_device=path)
-    except Exception:
-        pass
-    return jsonify({"ok": True, "rp2_device": path})
+    return _firmware_update_disabled()
 
 
-# --------- API: Flash latest firmware ---------
 @app.post("/api/rp/flash")
 def api_rp_flash():
-    data = request.get_json(force=True, silent=True) or {}
-    steps: list[dict] = []
-    def logstep(msg: str, ok: bool | None = None, **kv):
-        entry = {"ts": int(time.time()), "msg": msg}
-        if ok is not None:
-            entry["ok"] = bool(ok)
-        if kv:
-            entry.update(kv)
-        steps.append(entry)
-    try:
-        board = (data.get("board") or "rp2040").strip()
-        version = (data.get("version") or "").strip() or None
-        # Ensure we have serial connection to trigger BOOTSEL
-        sstat = serial_svc.get_serial_status(full=True)
-        if not sstat.get("connected"):
-            logstep("controller not connected", ok=False)
-            return jsonify({"ok": False, "error": "controller not connected", "progress": steps}), 400
+    return _firmware_update_disabled()
 
-        if _in_docker():
-            import glob
-            if not glob.glob("/dev/sd*") and not glob.glob("/dev/loop*"):
-                msg = "Missing host /dev mapping. Please map /dev to /dev in your container template."
-                logstep(msg, ok=False)
-                return jsonify({"ok": False, "error": msg, "progress": steps}), 400
 
-        c = load_config()
-        rp_cfg = c.get("rp", {}) if isinstance(c, dict) else {}
-        repo_url = rp_cfg.get("repo_url") or DEFAULT_CONFIG["rp"]["repo_url"]
-
-        # Fetch manifest to determine URL
-        manifest_url = repo_url.rstrip("/") + "/manifest.json"
-        logstep("fetching manifest", url=manifest_url)
-        manifest = _http_get_json(manifest_url)
-        if not (isinstance(manifest, dict) and isinstance(manifest.get("items"), list)):
-            logstep("manifest not available", ok=False)
-            return jsonify({"ok": False, "error": "manifest not available", "progress": steps}), 400
-        items: list[dict] = list(manifest.get("items") or [])
-        item: dict | None = None
-        if version:
-            for it in items:
-                if str(it.get("board")).lower() == board.lower() and str(it.get("version")) == version:
-                    item = it; break
-        else:
-            item = _select_latest_for_board(items, board)
-        if not item or not item.get("url"):
-            logstep("firmware not found for board/version", ok=False)
-            return jsonify({"ok": False, "error": "firmware not found for board/version", "progress": steps}), 404
-
-        fw_url = str(item.get("url"))
-
-        # 1) Reboot controller into BOOTSEL
-        logstep("sending BOOTSEL")
-        serial_svc.serial_send_line("BOOTSEL", expect_reply=False)
-        # Small grace period for USB disconnect
-        time.sleep(0.6)
-        # 2) Poll for RPI-RP2 block device (preferred path, by-label or probed)
-        dev = None
-        deadline = time.time() + 40.0
-        logstep("waiting for RPI-RP2 device")
-        while time.time() < deadline:
-            # Preferred path from config, if present
-            try:
-                c2 = load_config()
-                pref_dev = (c2.get("rp", {}) or {}).get("rp2_device") if isinstance(c2, dict) else ""
-                if pref_dev and os.path.exists(pref_dev) and _is_block_device(pref_dev):
-                    dev = str(pref_dev)
-            except Exception:
-                pass
-            if not dev:
-                dev = _find_rp2_dev_symlink() or _find_rp2_block_device()
-            if dev:
-                logstep("found RPI-RP2 device", ok=True, device=dev)
-                break
-            time.sleep(0.6)
-        if not dev:
-            logstep("RPI-RP2 device not detected (is container privileged?)", ok=False)
-            return jsonify({"ok": False, "error": "RPI-RP2 device not detected (is container privileged?)", "progress": steps}), 503
-
-        # 3) Mount, download, copy UF2, unmount
-        mnt = tempfile.mkdtemp(prefix="rp2-")
-        logstep("mounting RP2", mount=mnt)
-        ok, err = _mount_device(dev, mnt)
-        if not ok:
-            try: shutil.rmtree(mnt, ignore_errors=True)
-            except Exception: pass
-            logstep("mount failed", ok=False, error=str(err or "unknown"))
-            return jsonify({"ok": False, "error": f"mount failed: {err}", "progress": steps}), 503
-        tmp_uf2 = None
-        try:
-            # Download to temp file
-            tmp_fd, tmp_path = tempfile.mkstemp(prefix="fw-", suffix=".uf2")
-            os.close(tmp_fd)
-            tmp_uf2 = tmp_path
-            try:
-                logstep("downloading UF2", url=fw_url)
-                req = urllib.request.Request(fw_url, headers={"User-Agent": "fanbridge/1.0"})
-                with urllib.request.urlopen(req, timeout=20) as resp, open(tmp_path, "wb") as wf:
-                    shutil.copyfileobj(resp, wf)
-            except Exception as e:
-                logstep("download failed", ok=False, error=str(e))
-                return jsonify({"ok": False, "error": f"download failed: {e}", "progress": steps}), 502
-            # Copy to mounted volume (any filename is fine)
-            dst = os.path.join(mnt, os.path.basename(tmp_path) or "update.uf2")
-            try:
-                size = os.path.getsize(tmp_path)
-                logstep("copying UF2 to RP2", bytes=size, dst=dst)
-                shutil.copy2(tmp_path, dst)
-                # give ROM time to program before unmount
-                time.sleep(1.0)
-            except Exception as e:
-                logstep("copy failed", ok=False, error=str(e))
-                return jsonify({"ok": False, "error": f"copy failed: {e}", "progress": steps}), 503
-            # After flashing, wait for CDC device to re-enumerate and try to read version
-            re_ver = None
-            logstep("waiting for device to re-enumerate")
-            t_end = time.time() + 30.0
-            while time.time() < t_end:
-                try:
-                    res = serial_svc.serial_send_line("version", expect_reply=True, timeout=0.5)
-                    if res.get("ok") and res.get("reply"):
-                        re_ver = (res.get("reply") or "").strip() or None
-                        logstep("controller version read", ok=True, version=re_ver)
-                        break
-                except Exception:
-                    pass
-                time.sleep(0.5)
-            # Try a quick PING
-            ping_ok = None
-            try:
-                pres = serial_svc.serial_send_line("PING", expect_reply=True, timeout=0.6)
-                ping_ok = (pres.get("reply") == "PONG")
-                logstep("ping test", ok=bool(ping_ok), reply=pres.get("reply"))
-            except Exception as e:
-                logstep("ping test error", ok=False, error=str(e))
-            logstep("finished", ok=True)
-            return jsonify({"ok": True, "device": dev, "mount": mnt, "url": fw_url, "version": item.get("version"), "controller_version": re_ver, "progress": steps})
-        finally:
-            try:
-                _umount(mnt)
-            except Exception:
-                pass
-            try:
-                shutil.rmtree(mnt, ignore_errors=True)
-            except Exception:
-                pass
-            if tmp_uf2:
-                try: os.remove(tmp_uf2)
-                except Exception: pass
-    except Exception as e:
-        # Surface unexpected exceptions to the progress log and client
-        try:
-            logstep("unexpected error", ok=False, error=str(e))
-        except Exception:
-            pass
-        return jsonify({"ok": False, "error": str(e), "progress": steps}), 500
-
-# --------- API: Flash uploaded UF2 file ---------
 @app.post("/api/rp/flash_upload")
 def api_rp_flash_upload():
-    """Flash a locally-uploaded .uf2 file to the RP2040 controller.
+    return _firmware_update_disabled()
 
-    Accepts a multipart/form-data POST with a 'file' field containing the UF2.
-    The process mirrors /api/rp/flash but uses the uploaded file instead of
-    downloading from a remote manifest URL.
-    """
-    steps: list[dict] = []
-    def logstep(msg: str, ok: bool | None = None, **kv):
-        entry = {"ts": int(time.time()), "msg": msg}
-        if ok is not None:
-            entry["ok"] = bool(ok)
-        if kv:
-            entry.update(kv)
-        steps.append(entry)
-    try:
-        # Validate file upload
-        if 'file' not in request.files:
-            logstep("no file uploaded", ok=False)
-            return jsonify({"ok": False, "error": "no file uploaded", "progress": steps}), 400
-
-        if _in_docker():
-            import glob
-            if not glob.glob("/dev/sd*") and not glob.glob("/dev/loop*"):
-                msg = "Missing host /dev mapping. Please map /dev to /dev in your container template."
-                logstep(msg, ok=False)
-                return jsonify({"ok": False, "error": msg, "progress": steps}), 400
-        uf2_file = request.files['file']
-        if not uf2_file.filename:
-            logstep("empty filename", ok=False)
-            return jsonify({"ok": False, "error": "empty filename", "progress": steps}), 400
-        if not uf2_file.filename.lower().endswith('.uf2'):
-            logstep("file must be a .uf2", ok=False)
-            return jsonify({"ok": False, "error": "file must be a .uf2", "progress": steps}), 400
-
-        # Ensure serial connection for BOOTSEL command
-        sstat = serial_svc.get_serial_status(full=True)
-        if not sstat.get("connected"):
-            logstep("controller not connected", ok=False)
-            return jsonify({"ok": False, "error": "controller not connected", "progress": steps}), 400
-
-        # Save uploaded file to temp location
-        tmp_fd, tmp_path = tempfile.mkstemp(prefix="fw-upload-", suffix=".uf2")
-        os.close(tmp_fd)
-        tmp_uf2 = tmp_path
-        try:
-            uf2_file.save(tmp_path)
-            fsize = os.path.getsize(tmp_path)
-            logstep("saved uploaded file", ok=True, filename=uf2_file.filename, bytes=fsize)
-        except Exception as e:
-            logstep("failed to save upload", ok=False, error=str(e))
-            try: os.remove(tmp_path)
-            except Exception: pass
-            return jsonify({"ok": False, "error": f"failed to save upload: {e}", "progress": steps}), 500
-
-        # 1) Reboot controller into BOOTSEL
-        logstep("sending BOOTSEL")
-        serial_svc.serial_send_line("BOOTSEL", expect_reply=False)
-        time.sleep(0.6)
-
-        # 2) Poll for RPI-RP2 block device
-        dev = None
-        deadline = time.time() + 40.0
-        logstep("waiting for RPI-RP2 device")
-        while time.time() < deadline:
-            try:
-                c2 = load_config()
-                pref_dev = (c2.get("rp", {}) or {}).get("rp2_device") if isinstance(c2, dict) else ""
-                if pref_dev and os.path.exists(pref_dev) and _is_block_device(pref_dev):
-                    dev = str(pref_dev)
-            except Exception:
-                pass
-            if not dev:
-                dev = _find_rp2_dev_symlink() or _find_rp2_block_device()
-            if dev:
-                logstep("found RPI-RP2 device", ok=True, device=dev)
-                break
-            time.sleep(0.6)
-        if not dev:
-            logstep("RPI-RP2 device not detected (is container privileged?)", ok=False)
-            try: os.remove(tmp_uf2)
-            except Exception: pass
-            return jsonify({"ok": False, "error": "RPI-RP2 device not detected (is container privileged?)", "progress": steps}), 503
-
-        # 3) Mount, copy UF2, unmount
-        mnt = tempfile.mkdtemp(prefix="rp2-")
-        logstep("mounting RP2", mount=mnt)
-        ok_mount, err = _mount_device(dev, mnt)
-        if not ok_mount:
-            try: shutil.rmtree(mnt, ignore_errors=True)
-            except Exception: pass
-            try: os.remove(tmp_uf2)
-            except Exception: pass
-            logstep("mount failed", ok=False, error=str(err or "unknown"))
-            return jsonify({"ok": False, "error": f"mount failed: {err}", "progress": steps}), 503
-
-        try:
-            dst = os.path.join(mnt, os.path.basename(tmp_path) or "update.uf2")
-            try:
-                size = os.path.getsize(tmp_path)
-                logstep("copying UF2 to RP2", bytes=size, dst=dst)
-                shutil.copy2(tmp_path, dst)
-                time.sleep(1.0)
-            except Exception as e:
-                logstep("copy failed", ok=False, error=str(e))
-                return jsonify({"ok": False, "error": f"copy failed: {e}", "progress": steps}), 503
-
-            # Wait for CDC re-enumeration and read version
-            re_ver = None
-            logstep("waiting for device to re-enumerate")
-            t_end = time.time() + 30.0
-            while time.time() < t_end:
-                try:
-                    res = serial_svc.serial_send_line("version", expect_reply=True, timeout=0.5)
-                    if res.get("ok") and res.get("reply"):
-                        re_ver = (res.get("reply") or "").strip() or None
-                        logstep("controller version read", ok=True, version=re_ver)
-                        break
-                except Exception:
-                    pass
-                time.sleep(0.5)
-
-            # Ping test
-            ping_ok = None
-            try:
-                pres = serial_svc.serial_send_line("PING", expect_reply=True, timeout=0.6)
-                ping_ok = (pres.get("reply") == "PONG")
-                logstep("ping test", ok=bool(ping_ok), reply=pres.get("reply"))
-            except Exception as e:
-                logstep("ping test error", ok=False, error=str(e))
-
-            logstep("finished", ok=True)
-            return jsonify({
-                "ok": True,
-                "device": dev,
-                "mount": mnt,
-                "filename": uf2_file.filename,
-                "controller_version": re_ver,
-                "progress": steps,
-            })
-        finally:
-            try:
-                _umount(mnt)
-            except Exception:
-                pass
-            try:
-                shutil.rmtree(mnt, ignore_errors=True)
-            except Exception:
-                pass
-            if tmp_uf2:
-                try: os.remove(tmp_uf2)
-                except Exception: pass
-    except Exception as e:
-        try:
-            logstep("unexpected error", ok=False, error=str(e))
-        except Exception:
-            pass
-        return jsonify({"ok": False, "error": str(e), "progress": steps}), 500
 
 # --------- API: Exclude device ---------
 @app.post("/api/exclude")
 def api_exclude():
     data = request.get_json(force=True, silent=True) or {}
-    dev = (data.get("dev") or "").strip()
-    if not dev:
-        return jsonify({"ok": False, "error": "missing dev"}), 400
-    excluded = bool(data.get("excluded"))
+    if not isinstance(data, dict):
+        return jsonify({"ok": False, "error": "JSON object required"}), 400
+    raw_dev = data.get("dev")
+    if not isinstance(raw_dev, str):
+        return jsonify({"ok": False, "error": "device name must be a string"}), 400
+    dev = raw_dev.strip()
+    if not re.fullmatch(r"[A-Za-z0-9._:-]{1,64}", dev):
+        return jsonify({"ok": False, "error": "invalid device name"}), 400
+    excluded = data.get("excluded")
+    if not isinstance(excluded, bool):
+        return jsonify({"ok": False, "error": "excluded must be a boolean"}), 400
     c = load_config()
     current = set(c.get("exclude_devices") or [])
     if excluded:
@@ -1431,23 +1772,33 @@ def api_change_password():
         return jsonify({"ok": False, "error": "not authenticated"}), 401
 
     data = request.get_json(force=True, silent=True) or {}
-    current = (data.get("current") or "").strip()
-    new = (data.get("new") or "").strip()
-    confirm = (data.get("confirm") or "").strip()
+    if not isinstance(data, dict):
+        return jsonify({"ok": False, "error": "JSON object required"}), 400
+    current = data.get("current") or ""
+    new = data.get("new") or ""
+    confirm = data.get("confirm") or ""
+
+    if not all(isinstance(value, str) for value in (current, new, confirm)):
+        return jsonify({"ok": False, "error": "password fields must be strings"}), 400
 
     if not current or not new or not confirm:
         return jsonify({"ok": False, "error": "all fields required"}), 400
     if new != confirm:
         return jsonify({"ok": False, "error": "passwords do not match"}), 400
+    if len(new) < 12 or len(new) > 256:
+        return jsonify({"ok": False, "error": "new password must be 12-256 characters"}), 400
 
     users = _load_users()
-    stored = (users.get("users") or {}).get(user)
+    stored = _user_hash(users, str(user))
     if not stored or not check_password_hash(stored, current):
         return jsonify({"ok": False, "error": "current password is incorrect"}), 400
 
     # update hash
     users.setdefault("users", {})[user] = generate_password_hash(new)
+    versions = users.setdefault("session_versions", {})
+    versions[user] = _session_version(users, str(user)) + 1
     _save_users(users)
+    session["auth_version"] = int(versions[user])
     try:
         _audit("auth.password_changed", user=user)
     except Exception:
@@ -1456,36 +1807,161 @@ def api_change_password():
 
 
 # --------- API: Settings overrides ---------
+@app.post("/api/config")
+def api_config_transaction():
+    """Validate settings and curves together, then perform one durable write."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({"ok": False, "error": "JSON object required"}), 400
+    settings = data.get("settings")
+    curves = data.get("curves")
+    if not isinstance(settings, dict) or not isinstance(curves, dict):
+        return jsonify({"ok": False, "error": "settings and curves objects are required"}), 400
+
+    setting_keys = {
+        "single_override_hdd_c", "single_override_ssd_c",
+        "poll_interval_seconds", "control_interval_seconds",
+        "auto_apply_min_interval_seconds", "auto_apply_refresh_interval_seconds",
+        "auto_apply_hysteresis_percent", "excluded_devices", "exclude_devices",
+        "drive_assignments", "auto_apply", "fallback_pwm",
+    }
+    curve_keys = {"hdd_thresholds", "hdd_pwm", "ssd_thresholds", "ssd_pwm"}
+    unknown = sorted((set(settings) - setting_keys) | (set(curves) - curve_keys))
+    if unknown:
+        return jsonify({"ok": False, "error": "unknown configuration fields", "fields": unknown}), 400
+    if set(curves) != curve_keys:
+        return jsonify({"ok": False, "error": "all HDD and SSD curve fields are required"}), 400
+
+    current = load_config()
+    candidate = copy.deepcopy(current)
+    for key, raw in settings.items():
+        candidate["exclude_devices" if key == "excluded_devices" else key] = copy.deepcopy(raw)
+    candidate.update(copy.deepcopy(curves))
+    normalised = _normalise_config(_merge_defaults(_migrate_config(candidate), DEFAULT_CONFIG))
+
+    # Normalisation is a safety boundary, not silent API coercion. Every value
+    # supplied by the client must survive it exactly (apart from set ordering).
+    for key, raw in settings.items():
+        canonical = "exclude_devices" if key == "excluded_devices" else key
+        saved = normalised.get(canonical)
+        if canonical == "exclude_devices":
+            try:
+                valid = (
+                    isinstance(raw, list)
+                    and all(isinstance(item, str) for item in raw)
+                    and sorted(set(raw)) == saved
+                )
+            except TypeError:
+                valid = False
+        else:
+            valid = type(raw) is type(saved) and raw == saved
+        if not valid:
+            return jsonify({"ok": False, "error": f"invalid value for {key}"}), 400
+    for key, raw in curves.items():
+        if not isinstance(raw, list) or raw != normalised.get(key):
+            return jsonify({"ok": False, "error": f"invalid value for {key}"}), 400
+
+    save_config(normalised)
+    _CONTROL_WAKE.set()
+    _audit("config.transaction", settings=sorted(settings), curves=sorted(curves))
+    return jsonify({"ok": True, "settings": settings, "curves": curves})
+
+
 @app.post("/api/settings")
 def api_settings():
     data = request.get_json(force=True, silent=True) or {}
+    if not isinstance(data, dict) or not data:
+        return jsonify({"ok": False, "error": "settings object is required"}), 400
+
+    aliases = {
+        "min_interval_s": "auto_apply_min_interval_seconds",
+        "hysteresis_percent": "auto_apply_hysteresis_percent",
+        "auto_apply_min_interval_s": "auto_apply_min_interval_seconds",
+    }
+    normalised = {aliases.get(key, key): value for key, value in data.items()}
+    allowed = {
+        "single_override_hdd_c", "single_override_ssd_c",
+        "poll_interval_seconds", "control_interval_seconds",
+        "auto_apply_min_interval_seconds", "auto_apply_refresh_interval_seconds",
+        "auto_apply_hysteresis_percent", "excluded_devices", "exclude_devices",
+        "drive_assignments", "auto_apply", "fallback_pwm",
+    }
+    unknown = sorted(set(normalised) - allowed)
+    if unknown:
+        return jsonify({"ok": False, "error": "unknown settings", "fields": unknown}), 400
+
     c = load_config()
     changed = {}
 
-    def set_int(key, default, clamp: tuple[int,int] | None = None):
-        v = data.get(key, None)
+    def set_int(key: str, limits: tuple[int, int]):
+        v = normalised.get(key, None)
         if v is None:
             return
         try:
-            iv = int(str(v).strip())
-            if clamp:
-                lo, hi = clamp
-                if iv < lo: iv = lo
-                if iv > hi: iv = hi
-            c[key] = iv
-            changed[key] = iv
-        except Exception:
-            pass
+            if isinstance(v, bool):
+                raise ValueError
+            iv = int(v)
+        except (TypeError, ValueError):
+            raise ValueError(f"{key} must be an integer")
+        lo, hi = limits
+        if not lo <= iv <= hi:
+            raise ValueError(f"{key} must be between {lo} and {hi}")
+        c[key] = iv
+        changed[key] = iv
 
-    set_int("single_override_hdd_c", c.get("single_override_hdd_c", 45))
-    set_int("single_override_ssd_c", c.get("single_override_ssd_c", 60))
-    # New: allow changing the UI refresh interval (3–60s)
-    set_int("poll_interval_seconds", c.get("poll_interval_seconds", 7), clamp=(3, 60))
-    # Auto-apply tuning (optional)
-    set_int("auto_apply_min_interval_s", c.get("auto_apply_min_interval_s", 3), clamp=(1, 60))
-    set_int("auto_apply_hysteresis_duty", c.get("auto_apply_hysteresis_duty", 5), clamp=(0, 64))
+    try:
+        set_int("single_override_hdd_c", (20, 90))
+        set_int("single_override_ssd_c", (20, 110))
+        set_int("poll_interval_seconds", (3, 60))
+        set_int("control_interval_seconds", (2, 30))
+        set_int("auto_apply_min_interval_seconds", (1, 60))
+        set_int("auto_apply_refresh_interval_seconds", (5, 30))
+        set_int("auto_apply_hysteresis_percent", (0, 25))
+        set_int("fallback_pwm", (0, 100))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+    if "auto_apply" in normalised:
+        if not isinstance(normalised["auto_apply"], bool):
+            return jsonify({"ok": False, "error": "auto_apply must be a boolean"}), 400
+        c["auto_apply"] = normalised["auto_apply"]
+        changed["auto_apply"] = normalised["auto_apply"]
+
+    excluded_value = normalised.get("excluded_devices", normalised.get("exclude_devices"))
+    if excluded_value is not None:
+        if not isinstance(excluded_value, list) or len(excluded_value) > 256:
+            return jsonify({"ok": False, "error": "excluded_devices must be a list of at most 256 device names"}), 400
+        excluded: list[str] = []
+        for value in excluded_value:
+            dev = str(value).strip()
+            if not re.fullmatch(r"[A-Za-z0-9._:-]{1,64}", dev):
+                return jsonify({"ok": False, "error": f"invalid device name: {dev[:64]}"}), 400
+            excluded.append(dev)
+        c["exclude_devices"] = sorted(set(excluded))
+        changed["excluded_devices"] = c["exclude_devices"]
+
+    if "drive_assignments" in normalised:
+        value = normalised["drive_assignments"]
+        if not isinstance(value, dict) or len(value) > 256:
+            return jsonify({"ok": False, "error": "drive_assignments must be an object with at most 256 entries"}), 400
+        controller_ids = {str(item.get("id")) for item in c.get("controllers", [])}
+        assignments: dict[str, str] = {}
+        for raw_dev, raw_target in value.items():
+            dev = str(raw_dev).strip()
+            target = str(raw_target).strip()
+            if not re.fullmatch(r"[A-Za-z0-9._:-]{1,64}", dev):
+                return jsonify({"ok": False, "error": f"invalid assignment device: {dev[:64]}"}), 400
+            if target not in {"none", *controller_ids}:
+                return jsonify({"ok": False, "error": f"unknown assignment target for {dev}"}), 400
+            assignments[dev] = target
+        c["drive_assignments"] = assignments
+        changed["drive_assignments"] = assignments
+
+    if not changed:
+        return jsonify({"ok": False, "error": "no settings changed"}), 400
 
     save_config(c)
+    _CONTROL_WAKE.set()
     try:
         if changed:
             _audit("settings.update", changed=changed)
@@ -1498,33 +1974,58 @@ def api_settings():
 @app.post("/api/curves")
 def api_curves():
     data = request.get_json(force=True, silent=True) or {}
+    if not isinstance(data, dict) or not data:
+        return jsonify({"ok": False, "error": "curve object is required"}), 400
+
+    # Accept the paired UI representation during migration, but persist one
+    # canonical flat schema.
+    normalised = dict(data)
+    for drive_type in ("hdd", "ssd"):
+        points = data.get(drive_type)
+        if points is not None:
+            if not isinstance(points, list) or not points:
+                return jsonify({"ok": False, "error": f"{drive_type} must contain curve points"}), 400
+            try:
+                normalised[f"{drive_type}_thresholds"] = [point[0] for point in points]
+                normalised[f"{drive_type}_pwm"] = [point[1] for point in points]
+            except (TypeError, IndexError):
+                return jsonify({"ok": False, "error": f"invalid {drive_type} curve point"}), 400
+            normalised.pop(drive_type, None)
+
+    allowed = {"hdd_thresholds", "hdd_pwm", "ssd_thresholds", "ssd_pwm"}
+    unknown = sorted(set(normalised) - allowed)
+    if unknown:
+        return jsonify({"ok": False, "error": "unknown curve fields", "fields": unknown}), 400
+
     c = load_config()
     changed = {}
-    def set_list_int(key):
-        v = data.get(key)
-        if isinstance(v, list):
-            try:
-                arr = [int(x) for x in v][:32]
-                if not arr:
-                    return
-                c[key] = arr
-                changed[key] = arr
-            except Exception:
-                pass
-    def set_int_key(key):
-        v = data.get(key)
-        if v is None:
-            return
+    for drive_type in ("hdd", "ssd"):
+        t_key = f"{drive_type}_thresholds"
+        p_key = f"{drive_type}_pwm"
+        if t_key not in normalised and p_key not in normalised:
+            continue
+        if t_key not in normalised or p_key not in normalised:
+            return jsonify({"ok": False, "error": f"{t_key} and {p_key} must be supplied together"}), 400
         try:
-            c[key] = int(v)
-            changed[key] = int(v)
-        except Exception:
-            pass
-    set_list_int("hdd_thresholds")
-    set_list_int("hdd_pwm")
-    set_list_int("ssd_thresholds")
-    set_list_int("ssd_pwm")
+            thresholds = [int(value) for value in normalised[t_key]]
+            pwms = [int(value) for value in normalised[p_key]]
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": f"{drive_type} curve values must be integer lists"}), 400
+        if not 2 <= len(thresholds) <= 32 or len(thresholds) != len(pwms):
+            return jsonify({"ok": False, "error": f"{drive_type} curve must contain 2-32 paired points"}), 400
+        if any(not 0 <= value <= 120 for value in thresholds) or any(b <= a for a, b in zip(thresholds, thresholds[1:])):
+            return jsonify({"ok": False, "error": f"{drive_type} temperatures must be strictly increasing within 0-120"}), 400
+        if any(not 0 <= value <= 100 for value in pwms) or any(b < a for a, b in zip(pwms, pwms[1:])):
+            return jsonify({"ok": False, "error": f"{drive_type} PWM values must be non-decreasing within 0-100"}), 400
+        c[t_key] = thresholds
+        c[p_key] = pwms
+        changed[t_key] = thresholds
+        changed[p_key] = pwms
+
+    if not changed:
+        return jsonify({"ok": False, "error": "no curves changed"}), 400
     save_config(c)
+    _CONTROL_WAKE.set()
     try:
         if changed:
             # Log sizes to keep log lines readable; include first few values
@@ -1560,9 +2061,12 @@ def api_reset_defaults():
             "ssd_thresholds",
             "ssd_pwm",
             "poll_interval_seconds",
+            "control_interval_seconds",
             "auto_apply",
-            "auto_apply_min_interval_s",
-            "auto_apply_hysteresis_duty",
+            "auto_apply_min_interval_seconds",
+            "auto_apply_refresh_interval_seconds",
+            "auto_apply_hysteresis_percent",
+            "fallback_pwm",
         ]
         for k in keys:
             if k in defaults:
@@ -1587,6 +2091,43 @@ def api_reset_defaults():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+def _safe_stop_registered_controllers_on_exit() -> None:
+    """Best-effort immediate full cooling during a graceful container exit.
+
+    The firmware's independent 60-second lease remains the crash/SIGKILL
+    fallback. This hook shortens the normal Gunicorn/Docker stop path without
+    making process shutdown a safety dependency.
+    """
+    try:
+        controllers = list(serial_svc.list_registered_controllers())
+    except Exception:
+        controllers = []
+    for controller in controllers:
+        cid = str(controller.get("id") or "")
+        if not cid:
+            continue
+        try:
+            result = serial_svc.safe_stop_controller(cid)
+            if not result.get("ok"):
+                log.warning(
+                    "graceful-exit safe-stop was not verified | cid=%s error=%s",
+                    cid,
+                    result.get("error") or "unknown",
+                )
+        except Exception as exc:
+            try:
+                log.warning("graceful-exit safe-stop failed | cid=%s error=%s", cid, exc)
+            except Exception:
+                pass
+
+
+if _in_docker():
+    atexit.register(_safe_stop_registered_controllers_on_exit)
+
+
+_start_control_loop()
+
+
 if __name__ == "__main__":
     APP_VERSION = "local"
     app.secret_key = _load_or_create_secret()
@@ -1596,7 +2137,9 @@ if __name__ == "__main__":
     except Exception:
         pass
     # Local dev conveniences: show URL and optionally open browser
-    host = "0.0.0.0"
+    host = os.environ.get("FANBRIDGE_DEV_HOST", "127.0.0.1").strip()
+    if host not in {"127.0.0.1", "::1"}:
+        host = "127.0.0.1"
     port = 8080
     url = f"http://127.0.0.1:{port}"
     try:
@@ -1609,4 +2152,5 @@ if __name__ == "__main__":
             threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     except Exception:
         pass
-    app.run(host=host, port=port, debug=True)
+    debug_enabled = os.environ.get("FLASK_DEBUG", "0") == "1"
+    app.run(host=host, port=port, debug=debug_enabled, use_reloader=False)

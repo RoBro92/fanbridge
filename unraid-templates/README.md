@@ -1,32 +1,50 @@
-# FanBridge Unraid Templates
+# FanBridge Unraid Template
 
-These are the official Docker templates for deploying the FanBridge container on Unraid. FanBridge intelligently bridges Unraid drive temperatures to the external FanBridge Link microcontroller (RP2040) over USB serial to control your system's PWM fans.
+This template deploys FanBridge without privileged mode and gives it only the Unraid temperature data and serial devices it needs. It also enables Docker's no-new-privileges protection and drops all Linux capabilities; normal serial I/O, the high web port, and AppData access do not require them.
 
-## Installation Methods
+## Availability and installation
 
-| Method | Instructions |
-|---|---|
-| **Community Applications** | In Unraid, navigate to the `Apps` tab and search for **"FanBridge"**. Click install. |
-| **Manual XML** | Copy `templates/my-fanbridge.xml` into your Unraid templates directory and use the `Add Container` interface. |
+FanBridge is not currently listed in the public Community Applications feed while the listing is migrated. Until it appears there, install the template manually from an Unraid terminal:
 
-## Default Configuration
+```bash
+curl --fail --location --proto '=https' --tlsv1.2 \
+  --output /boot/config/plugins/dockerMan/templates-user/my-fanbridge.xml \
+  https://raw.githubusercontent.com/RoBroLabs/fanbridge/main/unraid-templates/templates/my-fanbridge.xml
+```
 
-The container is configured out-of-the-box with minimal, functional defaults. You can adjust these to fit your Unraid environment.
+Check that the downloaded file begins with the XML declaration and `<Container version="2">`, then open **Docker → Add Container** and select **FanBridge** from the template list.
 
-| Setting | Default Host Value | Container Mapping | Description |
+## Required mappings
+
+| Setting | Host value | Container value | Purpose |
 |---|---|---|---|
-| **Web UI Port** | `8080` | `8080` | Port for the FanBridge web interface. |
-| **AppData** | `/mnt/maincache/appdata/fanbridge` | `/config` | Persistent storage for application configuration. |
-| **emhttp Directory** | `/var/local/emhttp` | `/unraid` (Read-Only) | Directory used to read `disks.ini` for drive temperatures. |
-| **Serial Device** | `/dev/ttyACM0` | `/dev/ttyACM0` | USB serial connection to the FanBridge Link controller. |
+| Web UI | `8080` | `8080/tcp` | FanBridge interface. |
+| AppData | `/mnt/user/appdata/fanbridge` | `/config` | Persistent settings, users, secrets, and history. |
+| Unraid emhttp | `/var/local/emhttp` | `/unraid` (read-only) | Live `/unraid/disks.ini` temperature source. |
+| Controller 1 | `/dev/serial/by-id/<controller-id>` | `/dev/ttyACM0` | First FanBridge Link serial device. |
 
-*Advanced Note: You can optionally bind just `/var/local/emhttp/disks.ini` directly to `/unraid/disks.ini` (Read-Only) instead of the entire emhttp folder.*
+Use the controller's stable `/dev/serial/by-id/...` host path, not a changing `/dev/ttyACM*` host number. For each additional controller, add a **Device** mapping with a different host by-id path and a distinct container target such as `/dev/ttyACM1`; select that container path in FanBridge. Do not enable privileged mode or map all of `/dev`.
 
-## Important Links
+Map the entire `/var/local/emhttp` directory read-only. Do not add a second, overlapping bind for `disks.ini`, because a single-file bind can retain a stale inode when Unraid replaces the file.
 
-- **Support Thread:** [Unraid Forums](https://forums.unraid.net/topic/193488-fanbridge-docker-support/)
-- **Docker Image:** [`ghcr.io/robrolabs/fanbridge:latest`](https://github.com/RoBroLabs/fanbridge/pkgs/container/fanbridge)
+## Temperature update cadence
 
-## License
+FanBridge reads the temperatures that Unraid last wrote to `disks.ini`; it does not query drive SMART data itself. In **Settings → Disk Settings**, set **Tunable (poll_attributes)** to about `300` seconds (five minutes) for a useful cooling-control cadence. Keep `FANBRIDGE_DISKS_STALE_WARN_SEC` at about `600` seconds so one delayed or missed poll is tolerated before FanBridge treats the source as stale.
 
-These template files are provided under the main repository's license. See the upstream project for application licensing details.
+Shorter Unraid polling reacts sooner but adds SMART-query overhead and can affect parity-check performance or poorly behaved USB bridges. The FanBridge browser may refresh every few seconds, but those refreshes only reread the most recent Unraid sample; they do not make temperature telemetry instantaneous. See [Unraid's SMART monitoring documentation](https://docs.unraid.net/unraid-os/system-administration/monitor-performance/smart-reports-and-disk-health/).
+
+## First-run access
+
+Leave `FANBRIDGE_SETUP_TOKEN` blank to have FanBridge generate `/config/setup.token` and print the token once in the container log. Use that token when creating the first administrator account; FanBridge removes the generated token file after setup succeeds. You may instead preset a long random token, but Unraid stores environment values in its saved container template even when the UI masks them.
+
+In-container firmware flashing is hard-disabled. The template deliberately grants no USB bus, block-device, or mount access. Follow the [manual firmware guide](../fanbridge-link/README.md) from the Unraid host or a trusted workstation.
+
+The template also makes the container root filesystem read-only and provides only a small no-exec `/tmp`; persistent writes belong under the AppData `/config` mapping.
+
+If HTTPS terminates at a reverse proxy, set `FANBRIDGE_SECURE_COOKIES=1`. Do not expose the plain HTTP port directly to the internet.
+
+## Links
+
+- [Support thread](https://forums.unraid.net/topic/193488-fanbridge-docker-support/)
+- [Container image](https://github.com/RoBroLabs/fanbridge/pkgs/container/fanbridge)
+- [Project repository](https://github.com/RoBroLabs/fanbridge)

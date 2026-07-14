@@ -1,61 +1,97 @@
-name: Create Firmware Release
+name: Create DIY firmware release
 
 on:
   push:
-    tags: [ 'fw-v*' ]
+    tags: ['fw-v*']
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to create/update fanbridge-link release for (e.g., fw-v2.0.0)'
+        description: 'Existing DIY firmware tag (for example, fw-v2.4.0)'
         required: true
-        default: ''
+        type: string
+
+permissions:
+  contents: read
 
 jobs:
-  release-firmware:
+  release-diy-firmware:
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Determine ref and version
-        id: ref
+      - name: Validate tag and derive version
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          REF_NAME="${GITHUB_REF_NAME}"
-          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag }}" ]; then
-            REF_NAME="${{ inputs.tag }}"
+          set -euo pipefail
+          ref_name="$EVENT_REF_NAME"
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            ref_name="$INPUT_TAG"
           fi
-          echo "REF_NAME=${REF_NAME}" >> $GITHUB_ENV
-          
-          # Remove 'fw-v' prefix to get the raw version number (e.g., fw-v2.0.0 -> 2.0.0)
-          VER_NO_V="${REF_NAME#fw-v}"
-          echo "VER_NO_V=${VER_NO_V}" >> $GITHUB_ENV
+          if [[ ! "$ref_name" =~ ^fw-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid DIY firmware release tag: $ref_name" >&2
+            exit 1
+          fi
+          {
+            printf 'REF_NAME=%s\n' "$ref_name"
+            printf 'VER_NO_V=%s\n' "${ref_name#fw-v}"
+          } >> "$GITHUB_ENV"
 
-      - name: Checkout repo at tag
-        uses: actions/checkout@v4
+      - name: Check out the DIY firmware tag
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
-          ref: refs/tags/${{ env.REF_NAME }}
+          ref: ${{ env.REF_NAME }}
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Require recorded DIY hardware qualification
+        shell: bash
+        env:
+          VERSION: ${{ env.VER_NO_V }}
+          APPROVED_VERSION: ${{ vars.DIY_FIRMWARE_HIL_APPROVED_VERSION }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$APPROVED_VERSION" || "$APPROVED_VERSION" != "$VERSION" ]]; then
+            echo "DIY firmware $VERSION is not approved for release." >&2
+            echo "Complete and record the README hardware-in-the-loop matrix, then set the protected repository variable DIY_FIRMWARE_HIL_APPROVED_VERSION=$VERSION." >&2
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
+          cache: pip
 
       - name: Install PlatformIO
-        run: pip install platformio
+        run: python -m pip install --disable-pip-version-check platformio==6.1.19
 
-      - name: Build RP2040 Firmware
+      - name: Validate DIY source version and build firmware
+        shell: bash
+        env:
+          VERSION: ${{ env.VER_NO_V }}
         run: |
-          cd fanbridge-link/rp2040
-          pio run
-          cp .pio/build/pico/firmware.uf2 ../../fanbridge-rp2040-${{ env.VER_NO_V }}.uf2
+          set -euo pipefail
+          source_version=$(sed -n 's/.*FW_VERSION = "\([^"]*\)".*/\1/p' fanbridge-link/rp2040/src/main.cpp | head -n 1)
+          if [[ "$source_version" != "$VERSION" ]]; then
+            echo "DIY firmware source version $source_version does not match release $VERSION" >&2
+            exit 1
+          fi
+          pio run --project-dir fanbridge-link/rp2040
+          asset="fanbridge-rp2040-${VERSION}.uf2"
+          cp fanbridge-link/rp2040/.pio/build/pico/firmware.uf2 "$asset"
+          sha256sum "$asset" > "$asset.sha256"
 
-      - name: Create/Update GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Create or update GitHub release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ env.REF_NAME }}
-          name: Firmware ${{ env.VER_NO_V }}
-          body: "Automated RP2040 firmware release for FanBridge Link. Download the `.uf2` file below to flash your device."
+          name: DIY firmware ${{ env.VER_NO_V }}
+          body: 'Single-channel DIY Raspberry Pi Pico/RP2040 firmware. This is not compatible with the future six-channel custom PCB. Verify the UF2 with the attached SHA-256 file before flashing.'
           draft: false
           prerelease: false
           files: |
             fanbridge-rp2040-${{ env.VER_NO_V }}.uf2
+            fanbridge-rp2040-${{ env.VER_NO_V }}.uf2.sha256

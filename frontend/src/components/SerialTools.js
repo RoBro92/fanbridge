@@ -1,7 +1,7 @@
 export function initSerialTools(container) {
   container.innerHTML = `
-    <div class="glass-card" style="margin-top: 24px;">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+    <div class="glass-card" style="width: 100%; height: 100%; display: flex; flex-direction: column;">
+      <div style="display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 16px; flex-wrap: wrap;">
         <h3 style="margin: 0; display: flex; align-items: center; gap: 10px;">Serial Tools</h3>
         <div style="display: flex; align-items: center; gap: 12px;">
           <span style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--color-text-secondary); font-weight: 600;">Control Mode</span>
@@ -11,25 +11,19 @@ export function initSerialTools(container) {
           </div>
         </div>
       </div>
-      <div style="display:grid; grid-template-columns: minmax(260px, 360px) 1fr; gap:24px;">
-        <!-- Left: quick actions -->
+      <div style="display: flex; flex-direction: column; gap: 16px; flex: 1;">
         <div>
           <h4 style="margin: 0 0 8px; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: 1px; font-size: 11px;">Quick Commands</h4>
-          <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 24px;">
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
             <button class="btn" id="btnPing">PING</button>
             <button class="btn" id="btnTest">TEST</button>
             <button class="btn" id="btnVer">VERSION</button>
             <button class="btn" id="btnStat">STATUS</button>
           </div>
-
-          <h4 style="margin: 0 0 8px; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: 1px; font-size: 11px;">Send Raw Line</h4>
-          <div style="display: flex; gap: 8px; margin-bottom: 24px;">
-            <input type="text" id="serialLine" class="input-base" placeholder="Type a command e.g. 50" style="flex: 1;" />
-            <button class="btn btn-primary" id="btnSendLine">Send</button>
-          </div>
-
+        </div>
+        <div>
           <h4 style="margin: 0 0 8px; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: 1px; font-size: 11px;">PWM Test</h4>
-          <div style="display: flex; align-items: center; gap: 12px;">
+          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
             <input type="range" id="pwmRange" min="0" max="100" value="0" style="flex: 1;" />
             <span class="text-muted" style="font-size: 14px;"><strong id="pwmVal">0</strong>%</span>
             <button class="btn" id="btnPwmSend">Apply</button>
@@ -37,10 +31,9 @@ export function initSerialTools(container) {
           </div>
         </div>
 
-        <!-- Right: console output -->
-        <div style="display: flex; flex-direction: column;">
+        <div style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
           <h4 style="margin: 0 0 8px; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: 1px; font-size: 11px;">Console</h4>
-          <div id="serialConsole" style="flex: 1; height: 260px; overflow:auto; font-family: ui-monospace, monospace; font-size:12px; background: var(--color-bg-inset); border:1px solid var(--glass-border); border-radius: 8px; padding: 12px; white-space: pre-wrap; color: var(--color-text-primary);"></div>
+          <div id="serialConsole" style="flex: 1; min-height: 128px; max-height: 180px; overflow:auto; font-family: ui-monospace, monospace; font-size:12px; background: var(--color-bg-inset); border:1px solid var(--glass-border); border-radius: 8px; padding: 12px; white-space: pre-wrap; color: var(--color-text-primary);"></div>
         </div>
       </div>
     </div>

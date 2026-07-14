@@ -21,6 +21,24 @@ export const CURVE_PROFILES = {
   }
 };
 
+let latestDriveAssignments = {};
+let latestExcludedDevices = [];
+
+function formatCapacity(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes <= 0) return '—';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+  const order = Math.min(Math.floor(Math.log(bytes) / Math.log(1000)), units.length - 1);
+  const amount = bytes / (1000 ** order);
+  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: amount >= 10 ? 1 : 2 }).format(amount)} ${units[order]}`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, character => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[character]);
+}
+
 export function initSettingsContainer(container) {
   container.innerHTML = `
     <div style="width: 100%;">
@@ -44,6 +62,8 @@ export function initSettingsContainer(container) {
             <thead style="background: var(--color-bg-inset);">
               <tr>
                 <th style="padding: 10px 12px; color: var(--color-text-secondary); font-weight: 500;">Device</th>
+                <th style="padding: 10px 12px; color: var(--color-text-secondary); font-weight: 500;">Serial / ID</th>
+                <th style="padding: 10px 12px; color: var(--color-text-secondary); font-weight: 500;">Capacity</th>
                 <th style="padding: 10px 12px; color: var(--color-text-secondary); font-weight: 500;">Type</th>
                 <th style="padding: 10px 12px; color: var(--color-text-secondary); font-weight: 500;">State</th>
                 <th style="padding: 10px 12px; color: var(--color-text-secondary); font-weight: 500;">Temp (°C)</th>
@@ -53,6 +73,8 @@ export function initSettingsContainer(container) {
             <tbody>
               <tr style="border-bottom: 1px solid var(--glass-border);">
                 <td style="padding: 10px 12px;">/dev/sda</td>
+                <td style="padding: 10px 12px; font-family: ui-monospace, monospace;">WDC-WD80EFAX</td>
+                <td style="padding: 10px 12px; white-space: nowrap;">8 TB</td>
                 <td style="padding: 10px 12px;"><span style="background: hsla(200, 50%, 50%, 0.2); color: #7dd3fc; padding: 2px 6px; border-radius: 4px; font-size: 11px;">HDD</span></td>
                 <td style="padding: 10px 12px;">Active</td>
                 <td style="padding: 10px 12px;">34°C</td>
@@ -65,6 +87,8 @@ export function initSettingsContainer(container) {
               </tr>
               <tr>
                 <td style="padding: 10px 12px;">/dev/nvme0n1</td>
+                <td style="padding: 10px 12px; font-family: ui-monospace, monospace;">NVME-CACHE</td>
+                <td style="padding: 10px 12px; white-space: nowrap;">2 TB</td>
                 <td style="padding: 10px 12px;"><span style="background: hsla(280, 50%, 50%, 0.2); color: #d8b4fe; padding: 2px 6px; border-radius: 4px; font-size: 11px;">SSD</span></td>
                 <td style="padding: 10px 12px;">Standby</td>
                 <td style="padding: 10px 12px;">42°C</td>
@@ -366,36 +390,48 @@ export async function loadSettings() {
     const drivesTbody = document.querySelector('#global-drives-table-container tbody');
     if (drivesTbody && res.drives) {
       if (res.drives.length === 0) {
-        drivesTbody.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 16px; color: var(--color-text-secondary);">No drives detected in disks.ini</td></tr>';
+        drivesTbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 16px; color: var(--color-text-secondary);">No drives detected in disks.ini</td></tr>';
       } else {
         const controllers = res.controllers || [];
         const excludeList = res.exclude_devices || [];
-        
-        let controllerOptions = '<option value="none">Not Included</option>';
-        if (controllers.length === 0) {
-          controllerOptions += '<option value="global" disabled>No Controllers Added</option>';
-        } else {
-          controllers.forEach(c => {
-            controllerOptions += `<option value="${c.id}">${c.name}</option>`;
-          });
-          controllerOptions += '<option value="global">Global Profile</option>';
-        }
+        latestExcludedDevices = [...excludeList];
+        latestDriveAssignments = {
+          ...(res.config?.drive_assignments || {}),
+          ...(res.drive_assignments || {}),
+        };
+        const controllerIds = new Set(controllers.map(c => String(c.id || '')));
 
         drivesTbody.innerHTML = res.drives.map(d => {
           const isExcluded = excludeList.includes(d.dev);
           const isHDD = d.type === 'HDD';
           const typeColor = isHDD ? '#7dd3fc' : '#d8b4fe';
           const typeBg = isHDD ? 'hsla(200, 50%, 50%, 0.2)' : 'hsla(280, 50%, 50%, 0.2)';
+          const assignmentKey = String(d.id || d.slot || d.section || d.dev || '');
+          const assignment = d.assignment
+            ?? latestDriveAssignments[d.id]
+            ?? latestDriveAssignments[d.slot]
+            ?? latestDriveAssignments[d.section]
+            ?? latestDriveAssignments[d.dev];
+          const selectedAssignment = !isExcluded && controllerIds.has(String(assignment || ''))
+            ? String(assignment)
+            : 'none';
+          const serial = escapeHtml(d.serial || d.id || '—');
+          const controllerOptions = [
+            `<option value="none"${selectedAssignment === 'none' ? ' selected' : ''}>Not Included</option>`,
+            ...controllers.map(c => `<option value="${c.id}"${selectedAssignment === String(c.id) ? ' selected' : ''}>${c.name}</option>`),
+          ].join('');
           
           return `
             <tr style="border-bottom: 1px solid var(--glass-border);">
               <td style="padding: 10px 12px;">${d.dev}</td>
+              <td style="padding: 10px 12px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, monospace;" title="${serial}">${serial}</td>
+              <td style="padding: 10px 12px; white-space: nowrap;">${formatCapacity(d.capacity_bytes)}</td>
               <td style="padding: 10px 12px;"><span style="background: ${typeBg}; color: ${typeColor}; padding: 2px 6px; border-radius: 4px; font-size: 11px;">${d.type}</span></td>
               <td style="padding: 10px 12px;">${d.state || 'Unknown'}</td>
               <td style="padding: 10px 12px;">${d.temp !== null ? d.temp + '°C' : '--'}</td>
               <td style="padding: 10px 12px;">
-                <select class="input-base" style="padding: 4px 8px; font-size: 12px;" data-dev="${d.dev}">
-                  ${controllerOptions.replace('value="none"', isExcluded ? 'value="none" selected' : 'value="none"').replace('value="global"', !isExcluded && controllers.length > 0 ? 'value="global" selected' : 'value="global"')}
+                <select class="input-base" style="padding: 4px 8px; font-size: 12px;" data-dev="${d.dev}" data-assignment-key="${assignmentKey}" data-legacy-excluded="${isExcluded}">
+                  ${controllerOptions}
                 </select>
               </td>
             </tr>
@@ -405,8 +441,8 @@ export async function loadSettings() {
     }
 
     const cfg = res.config;
-    document.getElementById('setting-min-interval').value = cfg.min_interval_s || 3;
-    document.getElementById('setting-hysteresis').value = cfg.hysteresis_percent || 2;
+    document.getElementById('setting-min-interval').value = cfg.auto_apply_min_interval_seconds ?? res.auto_apply_min_interval_seconds ?? 3;
+    document.getElementById('setting-hysteresis').value = cfg.auto_apply_hysteresis_percent ?? res.auto_apply_hysteresis_percent ?? 2;
 
     const curves = res.curves || {};
     populateCurve('hdd', curves.hdd || []);
@@ -441,18 +477,22 @@ async function saveSettings() {
   
   try {
     // Read the form
-    const excludes = [];
+    const excludes = new Set(latestExcludedDevices);
+    const driveAssignments = { ...latestDriveAssignments };
     document.querySelectorAll('#global-drives-table-container select').forEach(select => {
-      if (select.value === 'none') {
-        const dev = select.getAttribute('data-dev');
-        if (dev) excludes.push(dev);
-      }
+      const dev = select.getAttribute('data-dev');
+      const assignmentKey = select.getAttribute('data-assignment-key') || dev;
+      if (!dev || !assignmentKey) return;
+      excludes.delete(dev);
+      driveAssignments[assignmentKey] = select.value || 'none';
+      if (select.value === 'none' && select.getAttribute('data-legacy-excluded') === 'true') excludes.add(dev);
     });
 
     const settingsPayload = {
       min_interval_s: parseInt(document.getElementById('setting-min-interval').value || 3, 10),
       hysteresis_percent: parseInt(document.getElementById('setting-hysteresis').value || 2, 10),
-      exclude_devices: excludes
+      exclude_devices: [...excludes].sort(),
+      drive_assignments: driveAssignments,
     };
 
     const hddCurve = extractCurve('hdd');
@@ -461,6 +501,8 @@ async function saveSettings() {
     // Save
     await api.saveSettings(settingsPayload);
     await api.saveCurves({ hdd: hddCurve, ssd: ssdCurve });
+    latestExcludedDevices = settingsPayload.exclude_devices;
+    latestDriveAssignments = settingsPayload.drive_assignments;
 
     statusEl.textContent = '✓ Saved Successfully';
     statusEl.style.color = 'var(--color-success)';

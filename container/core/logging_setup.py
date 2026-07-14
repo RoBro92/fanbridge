@@ -1,7 +1,5 @@
 import logging, sys, time, os
 from collections import deque
-from typing import Any
-
 try:
     from collections import deque as _deque  # noqa: F401
     import threading
@@ -57,9 +55,6 @@ def setup_logging() -> None:
     try:
         if not any(isinstance(h, RingBufferHandler) for h in root.handlers):
             root.addHandler(RingBufferHandler())
-        fb = logging.getLogger("fanbridge")
-        if not any(isinstance(h, RingBufferHandler) for h in fb.handlers):
-            fb.addHandler(RingBufferHandler())
     except Exception:
         pass
     root.setLevel(level)
@@ -86,8 +81,5 @@ def ensure_handlers() -> None:
         root = logging.getLogger()
         if not any(isinstance(h, RingBufferHandler) for h in root.handlers):
             root.addHandler(RingBufferHandler())
-        fb = logging.getLogger("fanbridge")
-        if not any(isinstance(h, RingBufferHandler) for h in fb.handlers):
-            fb.addHandler(RingBufferHandler())
     except Exception:
         pass

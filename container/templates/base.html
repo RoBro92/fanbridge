@@ -2,22 +2,131 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   {% if csrf_token %}<meta name="csrf-token" content="{{ csrf_token }}">{% endif %}
+  <meta name="color-scheme" content="dark light">
   <title>{% block title %}FanBridge{% endblock %}</title>
-  <!-- Favicons -->
-  <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='fanbridge.png') }}?v=1">
-  <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='fanbridge.png') }}?v=1">
-  <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='fanbridge.png') }}?v=1">
-  <link rel="mask-icon" href="{{ url_for('static', filename='safari-pinned-tab.svg') }}" color="#ff7a1a">
-  <link rel="shortcut icon" href="{{ url_for('static', filename='fanbridge.png') }}?v=1">
-  <!-- External app assets -->
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}?v={{ version or 1 }}">
-  <script src="{{ url_for('static', filename='app.js') }}?v={{ version or 1 }}" defer></script>
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='fanbridge.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='fanbridge.png') }}">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b111b;
+      --surface: #111927;
+      --inset: #080d15;
+      --border: rgba(226, 232, 240, .18);
+      --text: #f8fafc;
+      --muted: #a5b0c0;
+      --accent: #c2410c;
+      --accent-hover: #ea580c;
+      --error: #fda4af;
+      --error-bg: rgba(248, 113, 113, .11);
+    }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; margin: 0; }
+    body {
+      background:
+        radial-gradient(circle at 72% 14%, rgba(249, 115, 22, .08), transparent 32rem),
+        var(--bg);
+      color: var(--text);
+      font: 15px/1.5 Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input { font: inherit; }
+    :focus-visible { outline: 3px solid #fb923c; outline-offset: 3px; }
+    .login-page {
+      display: grid;
+      min-height: 100svh;
+      padding: 28px 18px;
+      place-items: center;
+    }
+    .login-shell { width: min(100%, 440px); }
+    .login-brand {
+      display: flex;
+      align-items: center;
+      gap: 13px;
+      margin: 0 0 18px;
+      font-size: 1.08rem;
+      font-weight: 800;
+      letter-spacing: -.01em;
+    }
+    .login-brand img { width: 44px; height: 44px; border-radius: 9px; }
+    .login-card {
+      padding: clamp(24px, 7vw, 38px);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: 0 28px 80px rgba(0, 0, 0, .28);
+    }
+    .eyebrow {
+      margin: 0 0 7px;
+      color: #fb923c;
+      font-size: .69rem;
+      font-weight: 800;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(1.65rem, 7vw, 2.25rem);
+      line-height: 1.13;
+      letter-spacing: -.035em;
+    }
+    .intro { margin: 12px 0 24px; color: var(--muted); }
+    .login-fields { display: grid; gap: 16px; }
+    .field { display: grid; gap: 6px; }
+    label { color: var(--muted); font-size: .8rem; font-weight: 700; }
+    input {
+      width: 100%;
+      min-height: 44px;
+      padding: 9px 11px;
+      color: var(--text);
+      background: var(--inset);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+    }
+    input:focus { border-color: #fb923c; outline: none; box-shadow: 0 0 0 3px rgba(249, 115, 22, .16); }
+    .field-help { margin: 0; color: var(--muted); font-size: .75rem; }
+    .login-error {
+      margin: 18px 0 0;
+      padding: 10px 12px;
+      color: var(--error);
+      background: var(--error-bg);
+      border: 1px solid rgba(248, 113, 113, .3);
+      border-radius: 7px;
+    }
+    .submit-button {
+      width: 100%;
+      min-height: 44px;
+      margin-top: 22px;
+      color: white;
+      background: var(--accent);
+      border: 1px solid var(--accent);
+      border-radius: 7px;
+      cursor: pointer;
+      font-weight: 800;
+    }
+    .submit-button:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+    .login-footnote { margin: 16px 0 0; color: var(--muted); font-size: .75rem; text-align: center; }
+    @media (prefers-color-scheme: light) {
+      :root {
+        color-scheme: light;
+        --bg: #f3f4f6;
+        --surface: #fff;
+        --inset: #f8fafc;
+        --border: rgba(15, 23, 42, .17);
+        --text: #151a22;
+        --muted: #566170;
+        --accent: #9a3412;
+        --accent-hover: #c2410c;
+        --error: #b91c1c;
+        --error-bg: rgba(185, 28, 28, .08);
+      }
+    }
+  </style>
   {% block head %}{% endblock %}
 </head>
-<body data-poll="{{ poll_s|int if poll_s is defined else 7 }}" data-version="{{ version or '—' }}">
+<body>
   {% block content %}{% endblock %}
 </body>
 </html>
-

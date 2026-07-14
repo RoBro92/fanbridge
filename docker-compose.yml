@@ -1,28 +1,31 @@
-version: "3.9"
-
 services:
   fanbridge:
-    # Build (includes RELEASE.md in image)
     build:
       context: .
       dockerfile: container/Dockerfile
     image: ghcr.io/robrolabs/fanbridge:latest
     environment:
-      - TZ=Europe/London
+      TZ: ${TZ:-Europe/London}
+      FANBRIDGE_DISKS_STALE_WARN_SEC: "600"
     ports:
       - "8080:8080"
     volumes:
-      # Persist app config
       - ./dev-appdata:/config
-      # Optional: expose stable USB serial symlinks for auto-detect (ro)
-      # - /dev/serial/by-id:/dev/serial/by-id:ro
-      # Optional: map Unraid disks (preferred: map the directory)
+      # On an Unraid host, enable this read-only directory mapping. FanBridge
+      # deliberately ships no fabricated disks.ini data.
       # - /var/local/emhttp:/unraid:ro
-      #   (or bind the single file)
-      - ./dev-unraid/disks.ini:/unraid/disks.ini:ro
-    # Optional device mapping; leave blank if unplugged
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    # Map each physical controller to a distinct path. Prefer a stable host
+    # /dev/serial/by-id entry; never expose all of /dev.
     # devices:
-    #   - "/dev/ttyACM0:/dev/ttyACM0"
-    # environment:
-    #   - FANBRIDGE_SERIAL_PORT=/dev/serial/by-id/usb-Your_Device
+    #   - "/dev/serial/by-id/usb-Your_DIY_Controller:/dev/ttyACM0"
+    # The custom six-channel target is reserved for a future host/firmware
+    # release; do not add this mapping to the current application yet.
+    #   - "/dev/serial/by-id/usb-Your_Six_Channel_Controller:/dev/ttyACM1"
     restart: unless-stopped
